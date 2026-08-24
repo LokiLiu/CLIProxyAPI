@@ -125,6 +125,21 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 	return ToolCall{ID: id, Name: original, Arguments: arguments}, true, nil
 }
 
+func NormalizeExternalToolCall(id, name string, input any, plan ToolPlan) (ToolCall, error) {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return ToolCall{}, err
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{Type: "tool_use", ID: id, Name: name, Input: raw}, plan)
+	if err != nil {
+		return ToolCall{}, err
+	}
+	if !keep {
+		return ToolCall{}, fmt.Errorf("tool call %q did not resolve to a concrete external function", name)
+	}
+	return call, nil
+}
+
 func schemaForTool(plan ToolPlan, sdkName string) map[string]any {
 	for _, spec := range plan.Specs {
 		if spec.SDKName == sdkName {

@@ -2,11 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 type toolSpec struct {
@@ -24,6 +27,7 @@ type request struct {
 }
 
 func main() {
+	trace("bridge started")
 	tools, err := loadTools()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -41,15 +45,32 @@ func main() {
 		if json.Unmarshal([]byte(line), &message) != nil || len(message.ID) == 0 {
 			continue
 		}
+		trace("request " + message.Method)
 		response := handle(message, tools)
 		_ = encoder.Encode(response)
 	}
 }
 
+func trace(message string) {
+	path := strings.TrimSpace(os.Getenv("CLI_PROXY_MCP_TRACE_FILE"))
+	if path == "" {
+		return
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintln(file, message)
+	_ = file.Close()
+}
+
 func loadTools() ([]toolSpec, error) {
-	encoded := strings.TrimSpace(os.Getenv("QODER_EXTERNAL_TOOLS"))
+	encoded := strings.TrimSpace(os.Getenv("CLI_PROXY_EXTERNAL_TOOLS"))
 	if encoded == "" {
-		return nil, fmt.Errorf("QODER_EXTERNAL_TOOLS is required")
+		encoded = strings.TrimSpace(os.Getenv("QODER_EXTERNAL_TOOLS"))
+	}
+	if encoded == "" {
+		return nil, fmt.Errorf("CLI_PROXY_EXTERNAL_TOOLS is required")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
@@ -86,6 +107,10 @@ func handle(message request, tools []toolSpec) map[string]any {
 		}
 		base["result"] = map[string]any{"tools": list}
 	case "tools/call":
+		if err := reportToolCall(message.Params); err != nil {
+			base["error"] = map[string]any{"code": -32603, "message": err.Error()}
+			break
+		}
 		base["result"] = map[string]any{
 			"isError": false,
 			"content": []map[string]any{{
@@ -97,4 +122,35 @@ func handle(message request, tools []toolSpec) map[string]any {
 		base["error"] = map[string]any{"code": -32601, "message": "Method not found"}
 	}
 	return base
+}
+
+func reportToolCall(raw json.RawMessage) error {
+	callbackURL := strings.TrimSpace(os.Getenv("CLI_PROXY_TOOL_CALLBACK_URL"))
+	if callbackURL == "" {
+		return nil
+	}
+	var params struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return fmt.Errorf("decode tool call: %w", err)
+	}
+	body, _ := json.Marshal(map[string]any{"name": params.Name, "input": params.Arguments})
+	request, err := http.NewRequest(http.MethodPost, callbackURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-CLI-Proxy-Tool-Secret", os.Getenv("CLI_PROXY_TOOL_CALLBACK_SECRET"))
+	client := http.Client{Timeout: 10 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("report tool call: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("tool callback returned HTTP %d", response.StatusCode)
+	}
+	return nil
 }

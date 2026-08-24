@@ -156,7 +156,7 @@ func writeMCPConfig(bridgePath string, tools []ToolSpec) (string, error) {
 			"command": bridgePath,
 			"args":    []string{},
 			"env": map[string]string{
-				"QODER_EXTERNAL_TOOLS": base64.RawURLEncoding.EncodeToString(rawTools),
+				"CLI_PROXY_EXTERNAL_TOOLS": base64.RawURLEncoding.EncodeToString(rawTools),
 			},
 		},
 	}}

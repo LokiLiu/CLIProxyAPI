@@ -1,8 +1,8 @@
-# Qoder CLI Provider
+# Qoder and Kiro CLI Providers
 
-This contribution adds Qoder CLI as an auth-bound CLIProxyAPI provider. CLIProxyAPI owns the public OpenAI, Anthropic, Gemini, scheduling, usage, and streaming protocols. The plugin only runs a logged-in `qodercli` process and converts its native events to canonical OpenAI chat completions.
+This contribution adds Qoder CLI and Kiro CLI as auth-bound CLIProxyAPI providers. CLIProxyAPI owns the public OpenAI, Anthropic, Gemini, scheduling, usage, and streaming protocols. The plugins only run logged-in CLI processes and convert their native events to canonical completions.
 
-The provider deliberately disables Qoder built-in tools, settings, project context, and built-in skills. Request tools are exposed through a temporary MCP server and returned to the upstream agent as standard tool calls. The MCP bridge never executes those tools.
+Qoder built-in tools, settings, project context, and built-in skills are disabled. Kiro runs in an isolated temporary workspace and its ACP permission handler rejects tools not supplied by the caller. Request tools are exposed through a temporary MCP server and returned to the upstream agent as standard tool calls. The bridge never executes those tools.
 
 ## Build on macOS
 
@@ -11,8 +11,11 @@ mkdir -p plugins/darwin/$(go env GOARCH)
 go build -buildmode=c-shared \
   -o plugins/darwin/$(go env GOARCH)/qoder.dylib \
   ./contrib/qoder-cli-provider/plugin
+go build -buildmode=c-shared \
+  -o plugins/darwin/$(go env GOARCH)/kiro.dylib \
+  ./contrib/qoder-cli-provider/plugin-kiro
 go build \
-  -o plugins/darwin/$(go env GOARCH)/qoder-mcp-bridge \
+  -o plugins/darwin/$(go env GOARCH)/cli-proxy-tool-bridge \
   ./contrib/qoder-cli-provider/cmd/qoder-mcp-bridge
 ```
 
@@ -24,6 +27,9 @@ plugins:
   dir: plugins
   configs:
     qoder:
+      enabled: true
+      priority: 1
+    kiro:
       enabled: true
       priority: 1
 ```
@@ -40,7 +46,7 @@ Run each CLI login against its own configuration root, then create one auth JSON
   "prefix": "qoder",
   "cli_path": "/Applications/Qoder.app/Contents/Resources/bin/qodercli",
   "config_dir": "/Users/me/.qoder-personal",
-  "bridge_path": "/absolute/path/to/plugins/darwin/arm64/qoder-mcp-bridge"
+  "bridge_path": "/absolute/path/to/plugins/darwin/arm64/cli-proxy-tool-bridge"
 }
 ```
 
@@ -52,10 +58,25 @@ Run each CLI login against its own configuration root, then create one auth JSON
   "prefix": "qoderwork",
   "cli_path": "/Applications/QoderWork.app/Contents/Resources/bin/qodercli",
   "config_dir": "/Users/me/.qoder-work",
-  "bridge_path": "/absolute/path/to/plugins/darwin/arm64/qoder-mcp-bridge"
+  "bridge_path": "/absolute/path/to/plugins/darwin/arm64/cli-proxy-tool-bridge"
 }
 ```
 
 Models are discovered with `qodercli --list-models`. An optional `models` array can pin the advertised list. Clients select models such as `qoder/Aria` and `qoderwork/Cantus`.
 
 The plugin removes `QODER_AGENT_SDK_*` and Qoder SDK auth-payload variables from child processes so each CLI uses its persistent login state instead of a desktop application's one-shot credential file.
+
+Kiro uses its normal persistent login and does not need a separate credential directory:
+
+```json
+{
+  "type": "kiro",
+  "id": "kiro-work",
+  "label": "Kiro",
+  "prefix": "kiro",
+  "cli_path": "/Users/me/.local/bin/kiro-cli",
+  "bridge_path": "/absolute/path/to/plugins/darwin/arm64/cli-proxy-tool-bridge"
+}
+```
+
+Kiro models are discovered with `kiro-cli chat --list-models --format json`. An optional `models` array can pin the advertised list. Clients select models such as `kiro/claude-opus-5`.
