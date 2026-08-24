@@ -48,6 +48,9 @@ func main() {
 		trace("request " + message.Method)
 		response := handle(message, tools)
 		_ = encoder.Encode(response)
+		if message.Method == "tools/list" {
+			notifyReady()
+		}
 	}
 }
 
@@ -153,4 +156,21 @@ func reportToolCall(raw json.RawMessage) error {
 		return fmt.Errorf("tool callback returned HTTP %d", response.StatusCode)
 	}
 	return nil
+}
+
+func notifyReady() {
+	callbackURL := strings.TrimSpace(os.Getenv("CLI_PROXY_MCP_READY_URL"))
+	if callbackURL == "" {
+		return
+	}
+	request, err := http.NewRequest(http.MethodPost, callbackURL, nil)
+	if err != nil {
+		return
+	}
+	request.Header.Set("X-CLI-Proxy-Tool-Secret", os.Getenv("CLI_PROXY_TOOL_CALLBACK_SECRET"))
+	client := http.Client{Timeout: 5 * time.Second}
+	response, err := client.Do(request)
+	if err == nil {
+		_ = response.Body.Close()
+	}
 }

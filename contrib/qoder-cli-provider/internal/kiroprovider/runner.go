@@ -117,6 +117,15 @@ func Run(ctx context.Context, account Account, invocation provider.Invocation, o
 	if session.SessionID == "" {
 		return stopWithError(cmd, stderrDone, &stderrMu, &stderrText, fmt.Errorf("Kiro ACP returned an empty session id"))
 	}
+	if len(invocation.Tools.Specs) > 0 {
+		select {
+		case <-callback.Ready:
+		case <-ctx.Done():
+			return stopWithError(cmd, stderrDone, &stderrMu, &stderrText, ctx.Err())
+		case <-time.After(30 * time.Second):
+			return stopWithError(cmd, stderrDone, &stderrMu, &stderrText, fmt.Errorf("Kiro MCP tool catalog did not become ready within 30 seconds"))
+		}
+	}
 	promptText := invocation.SystemPrompt + "\n\n" + invocation.Prompt
 	promptDone := make(chan error, 1)
 	var outcome promptResult
@@ -262,11 +271,14 @@ func writeAgent(path string, withTools bool) error {
 
 type callbackServer struct {
 	URL       string
+	ReadyURL  string
 	Secret    string
 	Calls     chan provider.ToolCall
+	Ready     chan struct{}
 	server    *http.Server
 	plan      provider.ToolPlan
 	TracePath string
+	readyOnce sync.Once
 }
 
 func newToolCallback(plan provider.ToolPlan) (*callbackServer, error) {
@@ -276,15 +288,26 @@ func newToolCallback(plan provider.ToolPlan) (*callbackServer, error) {
 	}
 	secretBytes := make([]byte, 24)
 	_, _ = rand.Read(secretBytes)
+	baseURL := "http://" + listener.Addr().String()
 	callback := &callbackServer{
-		URL: "http://" + listener.Addr().String() + "/tool", Secret: hex.EncodeToString(secretBytes),
-		Calls: make(chan provider.ToolCall, 4), plan: plan,
+		URL: baseURL + "/tool", ReadyURL: baseURL + "/ready", Secret: hex.EncodeToString(secretBytes),
+		Calls: make(chan provider.ToolCall, 4), Ready: make(chan struct{}), plan: plan,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/tool", callback.handle)
+	mux.HandleFunc("/ready", callback.handleReady)
 	callback.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = callback.server.Serve(listener) }()
 	return callback, nil
+}
+
+func (c *callbackServer) handleReady(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost || request.Header.Get("X-CLI-Proxy-Tool-Secret") != c.Secret {
+		http.Error(response, "not found", http.StatusNotFound)
+		return
+	}
+	c.readyOnce.Do(func() { close(c.Ready) })
+	response.WriteHeader(http.StatusNoContent)
 }
 
 func (c *callbackServer) handle(response http.ResponseWriter, request *http.Request) {
@@ -345,6 +368,7 @@ func mcpServer(account Account, specs []provider.ToolSpec, callback *callbackSer
 	environment := map[string]string{
 		"CLI_PROXY_EXTERNAL_TOOLS":       base64.RawURLEncoding.EncodeToString(raw),
 		"CLI_PROXY_TOOL_CALLBACK_URL":    callback.URL,
+		"CLI_PROXY_MCP_READY_URL":        callback.ReadyURL,
 		"CLI_PROXY_TOOL_CALLBACK_SECRET": callback.Secret,
 		"CLI_PROXY_MCP_TRACE_FILE":       callback.TracePath,
 	}
