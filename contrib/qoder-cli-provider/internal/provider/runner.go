@@ -384,11 +384,11 @@ func DiscoverModels(ctx context.Context, account Account) ([]string, error) {
 	return parseDiscoveredModels(string(raw)), nil
 }
 
-// Aria is accepted by qodercli 1.0.45 for both Qoder and QoderWork accounts,
-// even though recent releases no longer include it in --list-models output.
-// Keep this narrow compatibility list separate from discovery so unavailable
-// legacy models (for example Cantus) are not advertised.
-var qoderCompatibilityModels = []string{"Aria"}
+// Aria and Cantus are compatibility model names controlled by the Qoder
+// service. Recent CLI releases may omit them from --list-models even when an
+// account can still use them, so the gateway must not reject either name
+// before qodercli has a chance to handle the request.
+var qoderCompatibilityModels = []string{"Aria", "Cantus"}
 
 func parseDiscoveredModels(raw string) []string {
 	models := make([]string, 0)
