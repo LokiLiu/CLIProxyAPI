@@ -98,6 +98,12 @@ func IsRequestFault(status int, err error) bool {
 	if err != nil && IsItemNotPersisted(err.Error()) {
 		return true
 	}
+	// CLI-backed providers can return a plain-text model validation error before
+	// any HTTP response exists. Treat that as a request fault so it does not cool
+	// or rotate an otherwise healthy credential.
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "invalid model \"") {
+		return true
+	}
 	switch status {
 	case http.StatusBadRequest,
 		http.StatusConflict,

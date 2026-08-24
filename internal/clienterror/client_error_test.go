@@ -190,6 +190,7 @@ func TestIsRequestFault(t *testing.T) {
 			err:    errors.New(`{"error":{"code":500,"message":"Internal error encountered.","status":"UNKNOWN"}}`),
 		},
 		{name: "plain not found", status: http.StatusNotFound, err: errors.New("model not found")},
+		{name: "plain CLI invalid model", status: http.StatusBadGateway, err: errors.New(`EOF: Invalid model "Cantus".`), want: true},
 		{name: "unauthorized", status: http.StatusUnauthorized, err: errors.New("invalid token")},
 		{
 			name:   "deepseek authentication failure is credential failure",

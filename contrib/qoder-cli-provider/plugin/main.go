@@ -129,7 +129,8 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	}
 	raw, err := handleMethod(C.GoString(method), requestBytes)
 	if err != nil {
-		writeResponse(response, errorEnvelope("plugin_error", err.Error(), retryableError(err), http.StatusBadGateway))
+		code, status := pluginErrorDetails(err)
+		writeResponse(response, errorEnvelope(code, err.Error(), retryableError(err), status))
 		return 1
 	}
 	writeResponse(response, raw)
@@ -452,4 +453,11 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 func retryableError(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "intention_rejected") || strings.Contains(message, "requested_range_not_satisfiable")
+}
+
+func pluginErrorDetails(err error) (string, int) {
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "invalid model \"") {
+		return "model_not_found", http.StatusBadRequest
+	}
+	return "plugin_error", http.StatusBadGateway
 }
