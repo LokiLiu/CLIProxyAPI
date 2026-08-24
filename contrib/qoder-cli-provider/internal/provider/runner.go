@@ -112,7 +112,6 @@ func commandArgs(account Account, invocation Invocation) ([]string, func(), erro
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",
 		"--include-partial-messages",
-		"--no-session-persistence",
 		"--model", invocation.Model,
 		"--tools", "",
 		"--setting-sources", "",
@@ -387,7 +386,7 @@ func DiscoverModels(ctx context.Context, account Account) ([]string, error) {
 		line = strings.TrimSpace(line)
 		line = strings.TrimPrefix(line, "-")
 		line = strings.TrimSpace(line)
-		if line == "" || strings.Contains(strings.ToLower(line), "available model") {
+		if line == "" || strings.EqualFold(line, "model") || strings.Contains(strings.ToLower(line), "available model") {
 			continue
 		}
 		models = append(models, line)
