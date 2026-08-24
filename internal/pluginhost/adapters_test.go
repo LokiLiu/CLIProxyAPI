@@ -2927,6 +2927,89 @@ func TestExecutorAdapterUsesResponseFormatForOutputTranslation(t *testing.T) {
 	}
 }
 
+func TestExecutorAdapterPublishesOpenAIUsage(t *testing.T) {
+	records := make(chan coreusage.Record, 4)
+	const usagePluginName = "test:executor-adapter-openai-usage"
+	coreusage.RegisterNamedPlugin(usagePluginName, coreUsagePluginFunc(func(_ context.Context, record coreusage.Record) {
+		if record.Model == "usage-model" {
+			records <- record
+		}
+	}))
+	t.Cleanup(func() {
+		coreusage.RegisterNamedPlugin(usagePluginName, coreUsagePluginFunc(func(context.Context, coreusage.Record) {}))
+	})
+
+	host := New()
+	adapter := newCurrentExecutorAdapterForTest(host, "usage-executor-plugin", &fakeExecutor{
+		execute: func(context.Context, pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
+			return pluginapi.ExecutorResponse{Payload: []byte(`{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`)}, nil
+		},
+	}, []sdktranslator.Format{sdktranslator.FormatOpenAI}, []sdktranslator.Format{sdktranslator.FormatOpenAI})
+
+	_, errExecute := adapter.Execute(context.Background(), &coreauth.Auth{ID: "usage-auth", Provider: "plugin-provider"}, coreexecutor.Request{
+		Model:   "usage-model",
+		Format:  sdktranslator.FormatOpenAI,
+		Payload: []byte(`{"model":"usage-model","messages":[]}`),
+	}, coreexecutor.Options{SourceFormat: sdktranslator.FormatOpenAI, ResponseFormat: sdktranslator.FormatOpenAI})
+	if errExecute != nil {
+		t.Fatalf("Execute() error = %v", errExecute)
+	}
+
+	select {
+	case record := <-records:
+		if record.Provider != "plugin-provider" || record.Detail.InputTokens != 7 || record.Detail.OutputTokens != 3 || record.Detail.TotalTokens != 10 {
+			t.Fatalf("usage record = %#v, want plugin-provider with 7/3/10 tokens", record)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for plugin executor usage record")
+	}
+}
+
+func TestExecutorAdapterPublishesOpenAIStreamUsage(t *testing.T) {
+	records := make(chan coreusage.Record, 4)
+	const usagePluginName = "test:executor-adapter-openai-stream-usage"
+	coreusage.RegisterNamedPlugin(usagePluginName, coreUsagePluginFunc(func(_ context.Context, record coreusage.Record) {
+		if record.Model == "stream-usage-model" {
+			records <- record
+		}
+	}))
+	t.Cleanup(func() {
+		coreusage.RegisterNamedPlugin(usagePluginName, coreUsagePluginFunc(func(context.Context, coreusage.Record) {}))
+	})
+
+	pluginChunks := make(chan pluginapi.ExecutorStreamChunk, 2)
+	pluginChunks <- pluginapi.ExecutorStreamChunk{Payload: []byte(`{"choices":[{"delta":{"content":"ok"}}]}`)}
+	pluginChunks <- pluginapi.ExecutorStreamChunk{Payload: []byte(`{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}`)}
+	close(pluginChunks)
+
+	host := New()
+	adapter := newCurrentExecutorAdapterForTest(host, "stream-usage-executor-plugin", &fakeExecutor{
+		executeStream: func(context.Context, pluginapi.ExecutorRequest) (pluginapi.ExecutorStreamResponse, error) {
+			return pluginapi.ExecutorStreamResponse{Chunks: pluginChunks}, nil
+		},
+	}, []sdktranslator.Format{sdktranslator.FormatOpenAI}, []sdktranslator.Format{sdktranslator.FormatOpenAI})
+
+	stream, errExecute := adapter.ExecuteStream(context.Background(), &coreauth.Auth{ID: "stream-usage-auth", Provider: "plugin-provider"}, coreexecutor.Request{
+		Model:   "stream-usage-model",
+		Format:  sdktranslator.FormatOpenAI,
+		Payload: []byte(`{"model":"stream-usage-model","messages":[],"stream":true}`),
+	}, coreexecutor.Options{Stream: true, SourceFormat: sdktranslator.FormatOpenAI, ResponseFormat: sdktranslator.FormatOpenAI})
+	if errExecute != nil {
+		t.Fatalf("ExecuteStream() error = %v", errExecute)
+	}
+	for range stream.Chunks {
+	}
+
+	select {
+	case record := <-records:
+		if record.Provider != "plugin-provider" || record.Detail.InputTokens != 11 || record.Detail.OutputTokens != 4 || record.Detail.TotalTokens != 15 {
+			t.Fatalf("stream usage record = %#v, want plugin-provider with 11/4/15 tokens", record)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for plugin executor stream usage record")
+	}
+}
+
 func TestExecutorAdapterSelectsCustomOutputWithHostResponseTranslator(t *testing.T) {
 	customOutputFormat := sdktranslator.Format("plugin-custom-output")
 	requestedFormat := sdktranslator.FormatOpenAI

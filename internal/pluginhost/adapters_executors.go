@@ -669,10 +669,13 @@ func (a *executorAdapter) Execute(ctx context.Context, auth *coreauth.Auth, req 
 	if errPrepare != nil {
 		return coreexecutor.Response{}, errPrepare
 	}
+	reporter := helps.NewExecutorUsageReporter(ctx, a, prepared.req.Model, auth)
+	defer reporter.TrackFailure(ctx, &err)
 	pluginResp, errExecute := a.executor.Execute(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
 	if errExecute != nil {
 		return coreexecutor.Response{}, errExecute
 	}
+	publishPluginExecutorUsage(ctx, reporter, prepared.outputFormat, pluginResp.Payload)
 	return coreexecutor.Response{
 		Payload:  a.translateExecutorResponse(ctx, prepared, pluginResp.Payload, false, nil),
 		Metadata: cloneAnyMap(pluginResp.Metadata),
@@ -696,14 +699,74 @@ func (a *executorAdapter) ExecuteStream(ctx context.Context, auth *coreauth.Auth
 	if errPrepare != nil {
 		return nil, errPrepare
 	}
+	reporter := helps.NewExecutorUsageReporter(ctx, a, prepared.req.Model, auth)
+	reporter.StartResponseTTFT()
 	pluginResp, errExecuteStream := a.executor.ExecuteStream(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
 	if errExecuteStream != nil {
+		reporter.PublishFailure(ctx, errExecuteStream)
 		return nil, errExecuteStream
 	}
+	trackedChunks := trackPluginExecutorStreamUsage(ctx, pluginResp.Chunks, prepared.outputFormat, reporter)
 	return &coreexecutor.StreamResult{
 		Headers: cloneHeader(pluginResp.Headers),
-		Chunks:  mapExecutorStreamChunks(ctx, a.translateExecutorStreamChunks(ctx, prepared, pluginResp.Chunks)),
+		Chunks:  mapExecutorStreamChunks(ctx, a.translateExecutorStreamChunks(ctx, prepared, trackedChunks)),
 	}, nil
+}
+
+func publishPluginExecutorUsage(ctx context.Context, reporter *helps.UsageReporter, format sdktranslator.Format, payload []byte) {
+	if reporter == nil {
+		return
+	}
+	if format == sdktranslator.FormatOpenAI {
+		reporter.Publish(ctx, helps.ParseOpenAIUsage(payload))
+		return
+	}
+	reporter.EnsurePublished(ctx)
+}
+
+func trackPluginExecutorStreamUsage(ctx context.Context, chunks <-chan pluginapi.ExecutorStreamChunk, format sdktranslator.Format, reporter *helps.UsageReporter) <-chan pluginapi.ExecutorStreamChunk {
+	out := make(chan pluginapi.ExecutorStreamChunk)
+	go func() {
+		defer close(out)
+		var usageBuffer helps.StreamUsageBuffer
+		var terminalErr error
+		defer func() {
+			if terminalErr != nil {
+				usageBuffer.PublishFailure(ctx, reporter, terminalErr)
+				return
+			}
+			if !usageBuffer.Publish(ctx, reporter) {
+				reporter.EnsurePublished(ctx)
+			}
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				terminalErr = ctx.Err()
+				return
+			case chunk, ok := <-chunks:
+				if !ok {
+					return
+				}
+				if len(chunk.Payload) > 0 {
+					reporter.MarkFirstResponseByte()
+					if format == sdktranslator.FormatOpenAI {
+						usageBuffer.ObserveOpenAIStream(chunk.Payload)
+					}
+				}
+				if chunk.Err != nil {
+					terminalErr = chunk.Err
+				}
+				if !sendExecutorPluginStreamChunk(ctx, out, chunk) {
+					if terminalErr == nil {
+						terminalErr = ctx.Err()
+					}
+					return
+				}
+			}
+		}
+	}()
+	return out
 }
 
 func (a *executorAdapter) Refresh(ctx context.Context, auth *coreauth.Auth) (refreshed *coreauth.Auth, err error) {
