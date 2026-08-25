@@ -41,6 +41,16 @@ func TestNormalizeToolCallRejectsUnknownWrapper(t *testing.T) {
 	}
 }
 
+func TestAssistantResultIgnoresLossyToolMarkersWhenMCPCallbackIsAuthoritative(t *testing.T) {
+	event := qoderEvent{Type: "assistant", Message: qoderMessage{Content: []qoderBlock{{
+		Type: "tool_use", Name: "tool_calls", Input: json.RawMessage(`{"name":"bash"}`),
+	}}}}
+	_, calls, _, err := assistantResult(event, ToolPlan{}, false)
+	if err != nil || len(calls) != 0 {
+		t.Fatalf("calls=%#v err=%v", calls, err)
+	}
+}
+
 func TestNormalizeToolCallRejectsInvalidArguments(t *testing.T) {
 	plan := ToolPlan{
 		Specs: []ToolSpec{{Name: "bash", SDKName: "bash", Parameters: map[string]any{

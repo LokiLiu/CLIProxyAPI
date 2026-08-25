@@ -10,6 +10,7 @@ import (
 type qoderEvent struct {
 	Type    string          `json:"type"`
 	Subtype string          `json:"subtype"`
+	IsError bool            `json:"is_error"`
 	Result  string          `json:"result"`
 	Error   string          `json:"error"`
 	Errors  []string        `json:"errors"`
@@ -18,12 +19,22 @@ type qoderEvent struct {
 	Usage   qoderUsage      `json:"usage"`
 	Request struct {
 		RequestID string `json:"request_id"`
+		Type      string `json:"type"`
+		Subtype   string `json:"subtype"`
+		ToolName  string `json:"tool_name"`
 	} `json:"request"`
 	RequestID string `json:"request_id"`
 	Response  struct {
 		Subtype string `json:"subtype"`
 		Error   string `json:"error"`
 	} `json:"response"`
+}
+
+func (event qoderEvent) controlRequestType() string {
+	if event.Request.Subtype != "" {
+		return event.Request.Subtype
+	}
+	return event.Request.Type
 }
 
 type qoderMessage struct {
@@ -60,7 +71,7 @@ func textDelta(event qoderEvent) string {
 	return value.Delta.Text
 }
 
-func assistantResult(event qoderEvent, plan ToolPlan) (string, []ToolCall, Usage, error) {
+func assistantResult(event qoderEvent, plan ToolPlan, acceptToolCalls bool) (string, []ToolCall, Usage, error) {
 	var text strings.Builder
 	calls := make([]ToolCall, 0)
 	for _, block := range event.Message.Content {
@@ -68,6 +79,9 @@ func assistantResult(event qoderEvent, plan ToolPlan) (string, []ToolCall, Usage
 		case "text":
 			text.WriteString(block.Text)
 		case "tool_use":
+			if !acceptToolCalls {
+				continue
+			}
 			call, keep, err := normalizeToolCall(block, plan)
 			if err != nil {
 				return "", nil, Usage{}, err

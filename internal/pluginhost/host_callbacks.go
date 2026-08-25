@@ -117,6 +117,8 @@ func (h *Host) callFromPlugin(ctx context.Context, method string, request []byte
 		return h.callHostStreamEmit(ctx, request)
 	case pluginabi.MethodHostStreamClose:
 		return h.callHostStreamClose(request)
+	case pluginabi.MethodHostStreamStatus:
+		return h.callHostStreamStatus(request)
 	case pluginabi.MethodHostLog:
 		return h.callHostLog(ctx, request)
 	case pluginabi.MethodHostAuthList:
@@ -264,6 +266,14 @@ func (h *Host) callHostStreamClose(request []byte) ([]byte, error) {
 	}
 	h.streams.close(req.StreamID, req.Error)
 	return marshalRPCResult(rpcEmptyResponse{})
+}
+
+func (h *Host) callHostStreamStatus(request []byte) ([]byte, error) {
+	var req rpcStreamStatusRequest
+	if errUnmarshal := json.Unmarshal(request, &req); errUnmarshal != nil {
+		return nil, fmt.Errorf("decode stream status request: %w", errUnmarshal)
+	}
+	return marshalRPCResult(rpcStreamStatusResponse{Active: h.streams.active(req.StreamID)})
 }
 
 func (h *Host) callHostModelExecute(ctx context.Context, request []byte) ([]byte, error) {

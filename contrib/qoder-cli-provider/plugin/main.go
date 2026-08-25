@@ -88,6 +88,14 @@ type rpcExecutorRequest struct {
 	StreamID string `json:"stream_id,omitempty"`
 }
 
+type streamStatusRequest struct {
+	StreamID string `json:"stream_id"`
+}
+
+type streamStatusResponse struct {
+	Active bool `json:"active"`
+}
+
 type streamEmitRequest struct {
 	StreamID string `json:"stream_id"`
 	Payload  []byte `json:"payload,omitempty"`
@@ -314,8 +322,10 @@ func executeStream(raw []byte) ([]byte, error) {
 }
 
 func runStream(streamID string, account provider.Account, invocation provider.Invocation, format string) {
+	ctx, cancel := streamContext(streamID)
+	defer cancel()
 	if format == "claude" {
-		runAnthropicStream(streamID, account, invocation)
+		runAnthropicStream(ctx, streamID, account, invocation)
 		return
 	}
 	completionID := fmt.Sprintf("chatcmpl_%x", time.Now().UnixNano())
@@ -323,7 +333,7 @@ func runStream(streamID string, account provider.Account, invocation provider.In
 		closeStream(streamID, err)
 		return
 	}
-	result, err := provider.Run(context.Background(), account, invocation, func(text string) error {
+	result, err := provider.Run(ctx, account, invocation, func(text string) error {
 		return emitStream(streamID, provider.EncodeStreamText(completionID, invocation.Model, text))
 	})
 	if err != nil {
@@ -334,7 +344,7 @@ func runStream(streamID string, account provider.Account, invocation provider.In
 	closeStream(streamID, err)
 }
 
-func runAnthropicStream(streamID string, account provider.Account, invocation provider.Invocation) {
+func runAnthropicStream(ctx context.Context, streamID string, account provider.Account, invocation provider.Invocation) {
 	messageID := fmt.Sprintf("msg_%x", time.Now().UnixNano())
 	if err := emitStream(streamID, provider.EncodeAnthropicStreamEvent("message_start", map[string]any{
 		"type": "message_start",
@@ -350,7 +360,7 @@ func runAnthropicStream(streamID string, account provider.Account, invocation pr
 
 	textStarted := false
 	textIndex := 0
-	result, err := provider.Run(context.Background(), account, invocation, func(text string) error {
+	result, err := provider.Run(ctx, account, invocation, func(text string) error {
 		if !textStarted {
 			if errStart := emitStream(streamID, provider.EncodeAnthropicStreamEvent("content_block_start", map[string]any{
 				"type": "content_block_start", "index": textIndex,
@@ -499,6 +509,36 @@ func closeStream(streamID string, err error) {
 		message = err.Error()
 	}
 	_, _ = callHost(pluginabi.MethodHostStreamClose, streamCloseRequest{StreamID: streamID, Error: message})
+}
+
+func streamContext(streamID string) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				raw, err := callHost(pluginabi.MethodHostStreamStatus, streamStatusRequest{StreamID: streamID})
+				if err != nil {
+					// Older hosts do not expose stream status. The provider-side idle
+					// timeout remains the compatibility fallback in that case.
+					return
+				}
+				var status streamStatusResponse
+				if json.Unmarshal(raw, &status) != nil {
+					return
+				}
+				if !status.Active {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancel
 }
 
 func callHost(method string, payload any) (json.RawMessage, error) {

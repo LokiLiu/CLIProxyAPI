@@ -54,6 +54,14 @@ type rpcStreamCloseRequest struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type rpcStreamStatusRequest struct {
+	StreamID string `json:"stream_id"`
+}
+
+type rpcStreamStatusResponse struct {
+	Active bool `json:"active"`
+}
+
 func newStreamBridge() *streamBridge {
 	return &streamBridge{streams: make(map[string]*streamBridgeStream)}
 }
@@ -240,4 +248,22 @@ func (b *streamBridge) close(id string, errorMessage string) {
 		return
 	}
 	stream.close(errorMessage)
+}
+
+func (b *streamBridge) active(id string) bool {
+	if b == nil || id == "" {
+		return false
+	}
+	b.mu.Lock()
+	stream := b.streams[id]
+	b.mu.Unlock()
+	if stream == nil {
+		return false
+	}
+	select {
+	case <-stream.closed:
+		return false
+	default:
+		return true
+	}
 }

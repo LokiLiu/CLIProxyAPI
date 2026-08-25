@@ -13,7 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
+
+const qoderStreamIdleTimeout = 4 * time.Minute
 
 type TextHandler func(string) error
 
@@ -21,13 +24,19 @@ func Run(ctx context.Context, account Account, invocation Invocation, onText Tex
 	if onText == nil {
 		onText = func(string) error { return nil }
 	}
-	args, cleanup, errArgs := commandArgs(account, invocation)
+	callback, errCallback := newToolCallback(invocation.Tools)
+	if errCallback != nil {
+		return Result{}, errCallback
+	}
+	defer callback.Close()
+	args, cleanup, errArgs := commandArgs(account, invocation, callback)
 	if errArgs != nil {
 		return Result{}, errArgs
 	}
 	defer cleanup()
 
 	cmd := exec.CommandContext(ctx, account.CLIPath, args...)
+	configureProcessGroup(cmd)
 	cmd.Env = cleanEnvironment(account)
 	if account.CWD != "" {
 		cmd.Dir = account.CWD
@@ -72,7 +81,7 @@ func Run(ctx context.Context, account Account, invocation Invocation, onText Tex
 
 	encoder := json.NewEncoder(stdin)
 	if err = encoder.Encode(initializeRequest(invocation.SystemPrompt)); err != nil {
-		_ = cmd.Process.Kill()
+		_ = killProcessTree(cmd)
 		return Result{}, fmt.Errorf("initialize qodercli: %w", err)
 	}
 
@@ -80,20 +89,35 @@ func Run(ctx context.Context, account Account, invocation Invocation, onText Tex
 	readErrors := make(chan error, 1)
 	go readEvents(stdout, events, readErrors)
 	if err = waitForInitialize(ctx, events, readErrors); err != nil {
-		_ = cmd.Process.Kill()
+		_ = killProcessTree(cmd)
 		_ = cmd.Wait()
 		<-stderrDone
 		return Result{}, withStderr(err, stderrText(&stderrMu, &stderrBuffer))
 	}
+	if len(invocation.Tools.Specs) > 0 {
+		select {
+		case <-callback.Ready:
+		case <-ctx.Done():
+			_ = killProcessTree(cmd)
+			_ = cmd.Wait()
+			<-stderrDone
+			return Result{}, ctx.Err()
+		case <-time.After(30 * time.Second):
+			_ = killProcessTree(cmd)
+			_ = cmd.Wait()
+			<-stderrDone
+			return Result{}, withStderr(fmt.Errorf("qodercli MCP tool catalog did not become ready within 30 seconds"), stderrText(&stderrMu, &stderrBuffer))
+		}
+	}
 	if err = encoder.Encode(userRequest(invocation.Prompt)); err != nil {
-		_ = cmd.Process.Kill()
+		_ = killProcessTree(cmd)
 		return Result{}, fmt.Errorf("send qodercli request: %w", err)
 	}
 
-	result, runErr := consumeEvents(ctx, events, readErrors, invocation, onText)
+	result, runErr := consumeEvents(ctx, events, readErrors, callback.Calls, invocation, onText)
 	_ = stdin.Close()
 	if runErr != nil || len(result.ToolCalls) > 0 {
-		_ = cmd.Process.Kill()
+		_ = killProcessTree(cmd)
 	}
 	waitErr := cmd.Wait()
 	<-stderrDone
@@ -106,7 +130,7 @@ func Run(ctx context.Context, account Account, invocation Invocation, onText Tex
 	return result, nil
 }
 
-func commandArgs(account Account, invocation Invocation) ([]string, func(), error) {
+func commandArgs(account Account, invocation Invocation, callback *toolCallbackServer) ([]string, func(), error) {
 	args := []string{
 		"--print",
 		"--output-format", "stream-json",
@@ -130,7 +154,7 @@ func commandArgs(account Account, invocation Invocation) ([]string, func(), erro
 	if account.BridgePath == "" {
 		return nil, func() {}, fmt.Errorf("qoder auth %q requires bridge_path when tools are supplied", account.ID)
 	}
-	configFile, err := writeMCPConfig(account.BridgePath, invocation.Tools.Specs)
+	configFile, err := writeMCPConfig(account.BridgePath, invocation.Tools.Specs, callback)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -138,6 +162,7 @@ func commandArgs(account Account, invocation Invocation) ([]string, func(), erro
 		"--mcp-config", configFile,
 		"--strict-mcp-config",
 		"--allowed-mcp-server-names", "openai_tools",
+		"--permission-mode", "bypass_permissions",
 	)
 	for _, spec := range invocation.Tools.Specs {
 		args = append(args, "--allowed-tools", "mcp__openai_tools__"+spec.SDKName)
@@ -145,18 +170,24 @@ func commandArgs(account Account, invocation Invocation) ([]string, func(), erro
 	return args, func() { _ = os.Remove(configFile) }, nil
 }
 
-func writeMCPConfig(bridgePath string, tools []ToolSpec) (string, error) {
+func writeMCPConfig(bridgePath string, tools []ToolSpec, callback *toolCallbackServer) (string, error) {
 	rawTools, err := json.Marshal(tools)
 	if err != nil {
 		return "", fmt.Errorf("encode MCP tools: %w", err)
+	}
+	environment := map[string]string{
+		"CLI_PROXY_EXTERNAL_TOOLS": base64.RawURLEncoding.EncodeToString(rawTools),
+	}
+	if callback != nil {
+		environment["CLI_PROXY_TOOL_CALLBACK_URL"] = callback.URL
+		environment["CLI_PROXY_MCP_READY_URL"] = callback.ReadyURL
+		environment["CLI_PROXY_TOOL_CALLBACK_SECRET"] = callback.Secret
 	}
 	config := map[string]any{"mcpServers": map[string]any{
 		"openai_tools": map[string]any{
 			"command": bridgePath,
 			"args":    []string{},
-			"env": map[string]string{
-				"CLI_PROXY_EXTERNAL_TOOLS": base64.RawURLEncoding.EncodeToString(rawTools),
-			},
+			"env":     environment,
 		},
 	}}
 	rawConfig, _ := json.Marshal(config)
@@ -262,17 +293,31 @@ func waitForInitialize(ctx context.Context, events <-chan qoderEvent, readErrors
 				}
 				return nil
 			}
+			// The personal Qoder CLI 1.0.45 acknowledges initialization with
+			// system/init, while the QoderWork build uses control_response.
+			// Both are official stream-json handshakes.
+			if event.Type == "system" && event.Subtype == "init" {
+				return nil
+			}
 		}
 	}
 }
 
-func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-chan error, invocation Invocation, onText TextHandler) (Result, error) {
+func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-chan error, toolCalls <-chan ToolCall, invocation Invocation, onText TextHandler) (Result, error) {
 	result := Result{Model: invocation.Model, FinishReason: "stop"}
 	streamed := false
+	idle := time.NewTimer(qoderStreamIdleTimeout)
+	defer idle.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return Result{}, ctx.Err()
+		case <-idle.C:
+			return Result{}, fmt.Errorf("qodercli stream idle timeout after %s", qoderStreamIdleTimeout)
+		case call := <-toolCalls:
+			result.ToolCalls = []ToolCall{call}
+			result.FinishReason = "tool_calls"
+			return finalizeUsage(result, invocation), nil
 		case err := <-readErrors:
 			if errors.Is(err, io.EOF) && (result.Text != "" || len(result.ToolCalls) > 0) {
 				return finalizeUsage(result, invocation), nil
@@ -282,6 +327,13 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 			if !ok {
 				return Result{}, io.ErrUnexpectedEOF
 			}
+			resetTimer(idle, qoderStreamIdleTimeout)
+			if event.Type == "control_request" && event.controlRequestType() == "can_use_tool" {
+				return Result{}, fmt.Errorf("qodercli unexpectedly requested interactive permission for external tool %q", event.Request.ToolName)
+			}
+			if event.Type == "assistant" && strings.TrimSpace(event.Error) != "" {
+				return Result{}, fmt.Errorf("qodercli request failed: %s", strings.TrimSpace(event.Error))
+			}
 			if delta := textDelta(event); delta != "" {
 				streamed = true
 				if err := onText(delta); err != nil {
@@ -290,7 +342,11 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 			}
 			switch event.Type {
 			case "assistant":
-				text, calls, usage, err := assistantResult(event, invocation.Tools)
+				// With caller tools, the authenticated MCP callback is the source of
+				// truth. Qoder's assistant stream can contain lossy wrapper names such
+				// as mcp__openai_tools or tool_calls, so never race those artifacts
+				// against the exact tools/call payload from the bridge.
+				text, calls, usage, err := assistantResult(event, invocation.Tools, len(invocation.Tools.Specs) == 0)
 				if err != nil {
 					return Result{}, err
 				}
@@ -311,8 +367,15 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 					return finalizeUsage(result, invocation), nil
 				}
 			case "result":
-				if event.Subtype != "success" {
-					return Result{}, fmt.Errorf("qodercli request failed: %s", resultError(event))
+				if event.IsError || event.Subtype != "success" {
+					detail := resultError(event)
+					if detail == "" {
+						detail = strings.TrimSpace(event.Result)
+					}
+					if detail == "" {
+						detail = "unknown error"
+					}
+					return Result{}, fmt.Errorf("qodercli request failed: %s", detail)
 				}
 				if event.Result != "" {
 					result.Text = event.Result
@@ -332,6 +395,16 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 			}
 		}
 	}
+}
+
+func resetTimer(timer *time.Timer, duration time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(duration)
 }
 
 func finalizeUsage(result Result, invocation Invocation) Result {
@@ -366,11 +439,13 @@ func DiscoverModels(ctx context.Context, account Account) ([]string, error) {
 	if len(account.Models) > 0 {
 		return append([]string(nil), account.Models...), nil
 	}
+	discoveryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	args := []string{"--list-models"}
 	if account.ConfigDir != "" {
 		args = append(args, "--config-dir", account.ConfigDir)
 	}
-	cmd := exec.CommandContext(ctx, account.CLIPath, args...)
+	cmd := exec.CommandContext(discoveryCtx, account.CLIPath, args...)
 	cmd.Env = cleanEnvironment(account)
 	if account.CWD != "" {
 		cmd.Dir = account.CWD
@@ -379,7 +454,10 @@ func DiscoverModels(ctx context.Context, account Account) ([]string, error) {
 	}
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("list qoder models: %w: %s", err, strings.TrimSpace(string(raw)))
+		// Model discovery is advisory. Aria and Cantus are service-side
+		// compatibility names and must remain routable even when --list-models
+		// is stale, rate-limited, or unavailable for one account.
+		return append([]string(nil), qoderCompatibilityModels...), nil
 	}
 	return parseDiscoveredModels(string(raw)), nil
 }
