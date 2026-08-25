@@ -721,6 +721,10 @@ func publishPluginExecutorUsage(ctx context.Context, reporter *helps.UsageReport
 		reporter.Publish(ctx, helps.ParseOpenAIUsage(payload))
 		return
 	}
+	if format == sdktranslator.FormatClaude {
+		reporter.Publish(ctx, helps.ParseClaudeUsage(payload))
+		return
+	}
 	reporter.EnsurePublished(ctx)
 }
 
@@ -752,6 +756,10 @@ func trackPluginExecutorStreamUsage(ctx context.Context, chunks <-chan pluginapi
 					reporter.MarkFirstResponseByte()
 					if format == sdktranslator.FormatOpenAI {
 						usageBuffer.ObserveOpenAIStream(chunk.Payload)
+					} else if format == sdktranslator.FormatClaude {
+						for _, line := range bytes.Split(chunk.Payload, []byte("\n")) {
+							usageBuffer.Observe(helps.ParseClaudeStreamUsage(line))
+						}
 					}
 				}
 				if chunk.Err != nil {

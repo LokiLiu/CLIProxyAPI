@@ -34,6 +34,7 @@ type ToolPlan struct {
 	Selected    string
 	SelectedSDK string
 	Required    bool
+	PassThrough bool
 }
 
 type Invocation struct {

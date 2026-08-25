@@ -191,8 +191,8 @@ func pluginRegistration() registration {
 			ModelProvider:         true,
 			Executor:              true,
 			ExecutorModelScope:    string(pluginapi.ExecutorModelScopeOAuth),
-			ExecutorInputFormats:  []string{"openai"},
-			ExecutorOutputFormats: []string{"openai"},
+			ExecutorInputFormats:  []string{"claude", "openai"},
+			ExecutorOutputFormats: []string{"claude", "openai"},
 		},
 	}
 }
@@ -277,7 +277,7 @@ func execute(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &request); err != nil {
 		return nil, err
 	}
-	account, invocation, err := executionInput(request)
+	account, invocation, format, err := executionInput(request)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +285,12 @@ func execute(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	payload, err := provider.EncodeResponse(result)
+	var payload []byte
+	if format == "claude" {
+		payload, err = provider.EncodeAnthropicResponse(result)
+	} else {
+		payload, err = provider.EncodeResponse(result)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -300,15 +305,19 @@ func executeStream(raw []byte) ([]byte, error) {
 	if strings.TrimSpace(request.StreamID) == "" {
 		return errorEnvelope("executor_error", "stream_id is required", false, 0), nil
 	}
-	account, invocation, err := executionInput(request.ExecutorRequest)
+	account, invocation, format, err := executionInput(request.ExecutorRequest)
 	if err != nil {
 		return nil, err
 	}
-	go runStream(request.StreamID, account, invocation)
+	go runStream(request.StreamID, account, invocation, format)
 	return okEnvelope(map[string]any{"headers": http.Header{"Content-Type": []string{"text/event-stream"}}})
 }
 
-func runStream(streamID string, account provider.Account, invocation provider.Invocation) {
+func runStream(streamID string, account provider.Account, invocation provider.Invocation, format string) {
+	if format == "claude" {
+		runAnthropicStream(streamID, account, invocation)
+		return
+	}
 	completionID := fmt.Sprintf("chatcmpl_%x", time.Now().UnixNano())
 	if err := emitStream(streamID, provider.EncodeStreamRole(completionID, invocation.Model)); err != nil {
 		closeStream(streamID, err)
@@ -325,13 +334,107 @@ func runStream(streamID string, account provider.Account, invocation provider.In
 	closeStream(streamID, err)
 }
 
-func executionInput(request pluginapi.ExecutorRequest) (provider.Account, provider.Invocation, error) {
-	if request.Format != "" && request.Format != "openai" {
-		return provider.Account{}, provider.Invocation{}, fmt.Errorf("unsupported executor format %q", request.Format)
+func runAnthropicStream(streamID string, account provider.Account, invocation provider.Invocation) {
+	messageID := fmt.Sprintf("msg_%x", time.Now().UnixNano())
+	if err := emitStream(streamID, provider.EncodeAnthropicStreamEvent("message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id": messageID, "type": "message", "role": "assistant", "model": invocation.Model,
+			"content": []any{}, "stop_reason": nil, "stop_sequence": nil,
+			"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
+		},
+	})); err != nil {
+		closeStream(streamID, err)
+		return
+	}
+
+	textStarted := false
+	textIndex := 0
+	result, err := provider.Run(context.Background(), account, invocation, func(text string) error {
+		if !textStarted {
+			if errStart := emitStream(streamID, provider.EncodeAnthropicStreamEvent("content_block_start", map[string]any{
+				"type": "content_block_start", "index": textIndex,
+				"content_block": map[string]any{"type": "text", "text": ""},
+			})); errStart != nil {
+				return errStart
+			}
+			textStarted = true
+		}
+		return emitStream(streamID, provider.EncodeAnthropicStreamEvent("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": textIndex,
+			"delta": map[string]any{"type": "text_delta", "text": text},
+		}))
+	})
+	if err != nil {
+		closeStream(streamID, err)
+		return
+	}
+	if textStarted {
+		if err = emitStream(streamID, provider.EncodeAnthropicStreamEvent("content_block_stop", map[string]any{
+			"type": "content_block_stop", "index": textIndex,
+		})); err != nil {
+			closeStream(streamID, err)
+			return
+		}
+	}
+
+	nextIndex := 0
+	if textStarted {
+		nextIndex = 1
+	}
+	for _, call := range result.ToolCalls {
+		if err = emitStream(streamID, provider.EncodeAnthropicStreamEvent("content_block_start", map[string]any{
+			"type": "content_block_start", "index": nextIndex,
+			"content_block": map[string]any{"type": "tool_use", "id": call.ID, "name": call.Name, "input": map[string]any{}},
+		})); err != nil {
+			closeStream(streamID, err)
+			return
+		}
+		if err = emitStream(streamID, provider.EncodeAnthropicStreamEvent("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": nextIndex,
+			"delta": map[string]any{"type": "input_json_delta", "partial_json": string(call.Arguments)},
+		})); err != nil {
+			closeStream(streamID, err)
+			return
+		}
+		if err = emitStream(streamID, provider.EncodeAnthropicStreamEvent("content_block_stop", map[string]any{
+			"type": "content_block_stop", "index": nextIndex,
+		})); err != nil {
+			closeStream(streamID, err)
+			return
+		}
+		nextIndex++
+	}
+	stopReason := "end_turn"
+	if len(result.ToolCalls) > 0 {
+		stopReason = "tool_use"
+	}
+	if err = emitStream(streamID, provider.EncodeAnthropicStreamEvent("message_delta", map[string]any{
+		"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
+		"usage": map[string]any{"input_tokens": result.Usage.PromptTokens, "output_tokens": result.Usage.CompletionTokens},
+	})); err == nil {
+		err = emitStream(streamID, provider.EncodeAnthropicStreamEvent("message_stop", map[string]any{"type": "message_stop"}))
+	}
+	closeStream(streamID, err)
+}
+
+func executionInput(request pluginapi.ExecutorRequest) (provider.Account, provider.Invocation, string, error) {
+	format := strings.ToLower(strings.TrimSpace(request.Format))
+	if format == "" {
+		format = strings.ToLower(strings.TrimSpace(request.SourceFormat))
+	}
+	if format == "anthropic" {
+		format = "claude"
+	}
+	if format == "" {
+		format = "openai"
+	}
+	if format != "openai" && format != "claude" {
+		return provider.Account{}, provider.Invocation{}, "", fmt.Errorf("unsupported executor format %q", request.Format)
 	}
 	account, err := accountFromStorage(request.StorageJSON, request.AuthID)
 	if err != nil {
-		return provider.Account{}, provider.Invocation{}, err
+		return provider.Account{}, provider.Invocation{}, "", err
 	}
 	model := strings.TrimSpace(request.Model)
 	for _, prefix := range []string{account.Prefix + "/", "qoder/", "qoderwork/", "qoder2/"} {
@@ -341,8 +444,13 @@ func executionInput(request pluginapi.ExecutorRequest) (provider.Account, provid
 	if len(payload) == 0 {
 		payload = request.OriginalRequest
 	}
-	invocation, err := provider.BuildInvocation(payload, model)
-	return account, invocation, err
+	var invocation provider.Invocation
+	if format == "claude" {
+		invocation, err = provider.BuildAnthropicInvocation(payload, model)
+	} else {
+		invocation, err = provider.BuildInvocation(payload, model)
+	}
+	return account, invocation, format, err
 }
 
 func accountFromStorage(raw []byte, authID string) (provider.Account, error) {
@@ -373,7 +481,11 @@ func countTokens(raw []byte) ([]byte, error) {
 	if len(payload) == 0 {
 		payload = request.OriginalRequest
 	}
-	return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(fmt.Sprintf(`{"total_tokens":%d}`, (len(payload)+3)/4))})
+	tokens := (len(payload) + 3) / 4
+	if strings.EqualFold(request.Format, "claude") || strings.EqualFold(request.SourceFormat, "claude") || strings.EqualFold(request.SourceFormat, "anthropic") {
+		return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(fmt.Sprintf(`{"input_tokens":%d}`, tokens))})
+	}
+	return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(fmt.Sprintf(`{"total_tokens":%d}`, tokens))})
 }
 
 func emitStream(streamID string, payload []byte) error {

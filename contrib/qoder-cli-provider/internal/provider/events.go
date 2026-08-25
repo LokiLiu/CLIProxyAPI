@@ -111,9 +111,11 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 	if plan.Selected != "" && original != plan.Selected {
 		return ToolCall{}, false, fmt.Errorf("qoder returned tool %q instead of required tool %q", original, plan.Selected)
 	}
-	input = normalizeArguments(input, schemaForTool(plan, name))
-	if err := validateArguments(input, schemaForTool(plan, name), "arguments"); err != nil {
-		return ToolCall{}, false, fmt.Errorf("qoder returned invalid arguments for tool %s: %w (received keys: %s)", original, err, argumentKeySummary(input))
+	if !plan.PassThrough {
+		input = normalizeArguments(input, schemaForTool(plan, name))
+		if err := validateArguments(input, schemaForTool(plan, name), "arguments"); err != nil {
+			return ToolCall{}, false, fmt.Errorf("qoder returned invalid arguments for tool %s: %w (received keys: %s)", original, err, argumentKeySummary(input))
+		}
 	}
 	arguments, err := json.Marshal(input)
 	if err != nil {

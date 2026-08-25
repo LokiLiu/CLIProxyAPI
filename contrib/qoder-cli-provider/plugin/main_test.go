@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestPluginRegistrationSupportsNativeClaudeMessages(t *testing.T) {
+	registration := pluginRegistration()
+	if !containsString(registration.Capabilities.ExecutorInputFormats, "claude") || !containsString(registration.Capabilities.ExecutorOutputFormats, "claude") {
+		t.Fatalf("registration formats = %#v -> %#v", registration.Capabilities.ExecutorInputFormats, registration.Capabilities.ExecutorOutputFormats)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPluginErrorDetailsClassifiesInvalidModelAsBadRequest(t *testing.T) {
 	code, status := pluginErrorDetails(errors.New(`EOF: Invalid model "Cantus".`))
 	if code != "model_not_found" || status != http.StatusBadRequest {

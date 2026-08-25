@@ -2965,6 +2965,43 @@ func TestExecutorAdapterPublishesOpenAIUsage(t *testing.T) {
 	}
 }
 
+func TestExecutorAdapterPublishesClaudeUsage(t *testing.T) {
+	records := make(chan coreusage.Record, 1)
+	const usagePluginName = "test:executor-adapter-claude-usage"
+	coreusage.RegisterNamedPlugin(usagePluginName, coreUsagePluginFunc(func(_ context.Context, record coreusage.Record) {
+		if record.Model == "claude-usage-model" {
+			records <- record
+		}
+	}))
+	t.Cleanup(func() {
+		coreusage.RegisterNamedPlugin(usagePluginName, coreUsagePluginFunc(func(context.Context, coreusage.Record) {}))
+	})
+
+	host := New()
+	adapter := newCurrentExecutorAdapterForTest(host, "claude-usage-executor-plugin", &fakeExecutor{
+		execute: func(context.Context, pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
+			return pluginapi.ExecutorResponse{Payload: []byte(`{"type":"message","usage":{"input_tokens":7,"output_tokens":3}}`)}, nil
+		},
+	}, []sdktranslator.Format{sdktranslator.FormatClaude}, []sdktranslator.Format{sdktranslator.FormatClaude})
+
+	_, errExecute := adapter.Execute(context.Background(), &coreauth.Auth{ID: "usage-auth", Provider: "plugin-provider"}, coreexecutor.Request{
+		Model: "claude-usage-model", Format: sdktranslator.FormatClaude,
+		Payload: []byte(`{"model":"claude-usage-model","messages":[]}`),
+	}, coreexecutor.Options{SourceFormat: sdktranslator.FormatClaude, ResponseFormat: sdktranslator.FormatClaude})
+	if errExecute != nil {
+		t.Fatalf("Execute() error = %v", errExecute)
+	}
+
+	select {
+	case record := <-records:
+		if record.Detail.InputTokens != 7 || record.Detail.OutputTokens != 3 || record.Detail.TotalTokens != 10 {
+			t.Fatalf("usage record = %#v, want 7/3/10 tokens", record)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Claude plugin executor usage record")
+	}
+}
+
 func TestExecutorAdapterPublishesOpenAIStreamUsage(t *testing.T) {
 	records := make(chan coreusage.Record, 4)
 	const usagePluginName = "test:executor-adapter-openai-stream-usage"
@@ -3007,6 +3044,50 @@ func TestExecutorAdapterPublishesOpenAIStreamUsage(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for plugin executor stream usage record")
+	}
+}
+
+func TestExecutorAdapterPublishesClaudeStreamUsage(t *testing.T) {
+	records := make(chan coreusage.Record, 1)
+	const usagePluginName = "test:executor-adapter-claude-stream-usage"
+	coreusage.RegisterNamedPlugin(usagePluginName, coreUsagePluginFunc(func(_ context.Context, record coreusage.Record) {
+		if record.Model == "claude-stream-usage-model" {
+			records <- record
+		}
+	}))
+	t.Cleanup(func() {
+		coreusage.RegisterNamedPlugin(usagePluginName, coreUsagePluginFunc(func(context.Context, coreusage.Record) {}))
+	})
+
+	pluginChunks := make(chan pluginapi.ExecutorStreamChunk, 2)
+	pluginChunks <- pluginapi.ExecutorStreamChunk{Payload: []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":0}}}\n\n")}
+	pluginChunks <- pluginapi.ExecutorStreamChunk{Payload: []byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":11,\"output_tokens\":4}}\n\n")}
+	close(pluginChunks)
+
+	host := New()
+	adapter := newCurrentExecutorAdapterForTest(host, "claude-stream-usage-executor-plugin", &fakeExecutor{
+		executeStream: func(context.Context, pluginapi.ExecutorRequest) (pluginapi.ExecutorStreamResponse, error) {
+			return pluginapi.ExecutorStreamResponse{Chunks: pluginChunks}, nil
+		},
+	}, []sdktranslator.Format{sdktranslator.FormatClaude}, []sdktranslator.Format{sdktranslator.FormatClaude})
+
+	stream, errExecute := adapter.ExecuteStream(context.Background(), &coreauth.Auth{ID: "stream-usage-auth", Provider: "plugin-provider"}, coreexecutor.Request{
+		Model: "claude-stream-usage-model", Format: sdktranslator.FormatClaude,
+		Payload: []byte(`{"model":"claude-stream-usage-model","messages":[],"stream":true}`),
+	}, coreexecutor.Options{Stream: true, SourceFormat: sdktranslator.FormatClaude, ResponseFormat: sdktranslator.FormatClaude})
+	if errExecute != nil {
+		t.Fatalf("ExecuteStream() error = %v", errExecute)
+	}
+	for range stream.Chunks {
+	}
+
+	select {
+	case record := <-records:
+		if record.Detail.InputTokens != 11 || record.Detail.OutputTokens != 4 || record.Detail.TotalTokens != 15 {
+			t.Fatalf("stream usage record = %#v, want 11/4/15 tokens", record)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Claude stream usage record")
 	}
 }
 

@@ -119,3 +119,23 @@ func TestNormalizeToolCallDoesNotUnwrapDeclaredEnvelopeProperty(t *testing.T) {
 		t.Fatalf("unexpected call: %#v", call)
 	}
 }
+
+func TestNormalizeToolCallPassesAnthropicArgumentsWithoutCoercion(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{{Name: "bash", SDKName: "bash", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{"timeoutMs": map[string]any{"type": "integer"}},
+		}}},
+		NameBySDK:   map[string]string{"bash": "bash"},
+		PassThrough: true,
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{
+		Type: "tool_use", ID: "toolu_1", Name: "mcp__openai_tools__bash",
+		Input: json.RawMessage(`{"timeoutMs":"1200"}`),
+	}, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keep || string(call.Arguments) != `{"timeoutMs":"1200"}` {
+		t.Fatalf("unexpected pass-through call: %#v", call)
+	}
+}

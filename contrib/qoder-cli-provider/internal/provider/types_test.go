@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,43 @@ func TestBuildInvocationRejectsImageInput(t *testing.T) {
 }`), "Aria")
 	if err == nil {
 		t.Fatal("expected image input to be rejected")
+	}
+}
+
+func TestBuildAnthropicInvocationPreservesToolBlocks(t *testing.T) {
+	raw := []byte(`{
+  "model":"qoder/Aria",
+  "system":[{"type":"text","text":"Be concise."}],
+  "messages":[
+    {"role":"user","content":[{"type":"text","text":"Read it"}]},
+    {"role":"assistant","content":[{"type":"tool_use","id":"toolu_old","name":"read_file","input":{"path":"old"}}]},
+    {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_old","content":"old contents"}]}
+  ],
+  "tools":[{"name":"read.file","description":"Read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}],
+  "tool_choice":{"type":"any"},
+  "max_tokens":123
+}`)
+	invocation, err := BuildAnthropicInvocation(raw, "Aria")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invocation.Model != "Aria" || invocation.MaxTokens != 123 || !invocation.Tools.Required || !invocation.Tools.PassThrough {
+		t.Fatalf("unexpected invocation: %#v", invocation)
+	}
+	if len(invocation.Tools.Specs) != 1 || invocation.Tools.Specs[0].SDKName != "read_file" {
+		t.Fatalf("unexpected tools: %#v", invocation.Tools)
+	}
+	if !strings.Contains(invocation.Prompt, `"type": "tool_result"`) || !strings.Contains(invocation.Prompt, `"tool_use_id": "toolu_old"`) {
+		t.Fatalf("prompt lost Anthropic tool history: %s", invocation.Prompt)
+	}
+}
+
+func TestBuildAnthropicInvocationRejectsImageInput(t *testing.T) {
+	_, err := BuildAnthropicInvocation([]byte(`{
+  "model":"Aria",
+  "messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]
+}`), "Aria")
+	if err == nil {
+		t.Fatal("expected Anthropic image input to be rejected")
 	}
 }

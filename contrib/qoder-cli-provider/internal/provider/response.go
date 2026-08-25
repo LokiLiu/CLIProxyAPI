@@ -29,6 +29,33 @@ func EncodeResponse(result Result) ([]byte, error) {
 	})
 }
 
+func EncodeAnthropicResponse(result Result) ([]byte, error) {
+	content := make([]map[string]any, 0, 1+len(result.ToolCalls))
+	if result.Text != "" {
+		content = append(content, map[string]any{"type": "text", "text": result.Text})
+	}
+	for _, call := range result.ToolCalls {
+		var input any = map[string]any{}
+		if len(call.Arguments) > 0 {
+			if err := json.Unmarshal(call.Arguments, &input); err != nil {
+				return nil, fmt.Errorf("decode arguments for Anthropic tool %s: %w", call.Name, err)
+			}
+		}
+		content = append(content, map[string]any{
+			"type": "tool_use", "id": call.ID, "name": call.Name, "input": input,
+		})
+	}
+	stopReason := "end_turn"
+	if len(result.ToolCalls) > 0 {
+		stopReason = "tool_use"
+	}
+	return json.Marshal(map[string]any{
+		"id": completionID("msg"), "type": "message", "role": "assistant", "model": result.Model,
+		"content": content, "stop_reason": stopReason, "stop_sequence": nil,
+		"usage": map[string]any{"input_tokens": result.Usage.PromptTokens, "output_tokens": result.Usage.CompletionTokens},
+	})
+}
+
 func EncodeStreamRole(id, model string) []byte {
 	return encodeStreamJSON(map[string]any{
 		"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model,
@@ -65,4 +92,9 @@ func EncodeStreamFinish(id string, result Result) []byte {
 func encodeStreamJSON(value any) []byte {
 	raw, _ := json.Marshal(value)
 	return raw
+}
+
+func EncodeAnthropicStreamEvent(event string, value any) []byte {
+	raw, _ := json.Marshal(value)
+	return []byte("event: " + event + "\ndata: " + string(raw) + "\n\n")
 }
