@@ -53,3 +53,69 @@ func TestNormalizeToolCallRejectsInvalidArguments(t *testing.T) {
 		t.Fatal("expected invalid integer to be rejected")
 	}
 }
+
+func TestNormalizeToolCallMapsEquivalentPropertyNames(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{{Name: "job_output", SDKName: "job_output", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"job_id":     map[string]any{"type": "string"},
+				"timeout_ms": map[string]any{"type": "integer"},
+			}, "required": []any{"job_id"},
+		}}},
+		NameBySDK: map[string]string{"job_output": "job_output"},
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{
+		Type: "tool_use", Name: "mcp__openai_tools__job_output",
+		Input: json.RawMessage(`{"jobId":"bash-35","timeoutMs":"600000"}`),
+	}, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keep || call.Name != "job_output" || string(call.Arguments) != `{"job_id":"bash-35","timeout_ms":600000}` {
+		t.Fatalf("unexpected call: %#v", call)
+	}
+}
+
+func TestNormalizeToolCallUnwrapsConcreteToolArgumentEnvelope(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{{Name: "job_output", SDKName: "job_output", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"job_id": map[string]any{"type": "string"},
+			}, "required": []any{"job_id"},
+		}}},
+		NameBySDK: map[string]string{"job_output": "job_output"},
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{
+		Type: "tool_use", Name: "mcp__openai_tools__job_output",
+		Input: json.RawMessage(`{"name":"job_output","arguments":"{\"job_id\":\"bash-35\"}"}`),
+	}, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keep || string(call.Arguments) != `{"job_id":"bash-35"}` {
+		t.Fatalf("unexpected call: %#v", call)
+	}
+}
+
+func TestNormalizeToolCallDoesNotUnwrapDeclaredEnvelopeProperty(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{{Name: "send", SDKName: "send", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"input": map[string]any{"type": "object", "properties": map[string]any{
+					"value_id": map[string]any{"type": "string"},
+				}},
+			}, "required": []any{"input"},
+		}}},
+		NameBySDK: map[string]string{"send": "send"},
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{
+		Type: "tool_use", Name: "mcp__openai_tools__send",
+		Input: json.RawMessage(`{"input":{"valueId":"v1"}}`),
+	}, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keep || string(call.Arguments) != `{"input":{"value_id":"v1"}}` {
+		t.Fatalf("unexpected call: %#v", call)
+	}
+}

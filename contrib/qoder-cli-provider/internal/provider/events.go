@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -112,7 +113,7 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 	}
 	input = normalizeArguments(input, schemaForTool(plan, name))
 	if err := validateArguments(input, schemaForTool(plan, name), "arguments"); err != nil {
-		return ToolCall{}, false, fmt.Errorf("qoder returned invalid arguments for tool %s: %w", original, err)
+		return ToolCall{}, false, fmt.Errorf("qoder returned invalid arguments for tool %s: %w (received keys: %s)", original, err, argumentKeySummary(input))
 	}
 	arguments, err := json.Marshal(input)
 	if err != nil {
@@ -194,38 +195,154 @@ func firstArgumentString(value map[string]any, keys ...string) string {
 }
 
 func normalizeArguments(value map[string]any, schema map[string]any) map[string]any {
-	properties, _ := schema["properties"].(map[string]any)
-	for key, rawSchema := range properties {
-		property, _ := rawSchema.(map[string]any)
-		kind, _ := property["type"].(string)
-		current, exists := value[key]
-		if !exists {
-			continue
+	normalized, _ := normalizeArgumentValue(value, schema).(map[string]any)
+	if normalized == nil {
+		return value
+	}
+	return normalized
+}
+
+func normalizeArgumentValue(value any, schema map[string]any) any {
+	kind, _ := schema["type"].(string)
+	switch kind {
+	case "object":
+		object, ok := value.(map[string]any)
+		if !ok {
+			return value
 		}
-		switch kind {
-		case "integer", "number":
-			if text, ok := current.(string); ok {
-				var number json.Number = json.Number(strings.TrimSpace(text))
-				if kind == "integer" {
-					if parsed, err := number.Int64(); err == nil {
-						value[key] = parsed
-					}
-				} else if parsed, err := number.Float64(); err == nil {
-					value[key] = parsed
+		properties, _ := schema["properties"].(map[string]any)
+		object = unwrapArgumentEnvelope(object, properties)
+		object = normalizePropertyNames(object, properties)
+		for key, current := range object {
+			property, _ := properties[key].(map[string]any)
+			object[key] = normalizeArgumentValue(current, property)
+		}
+		return object
+	case "array":
+		items, ok := value.([]any)
+		if !ok {
+			return value
+		}
+		itemSchema, _ := schema["items"].(map[string]any)
+		for index, item := range items {
+			items[index] = normalizeArgumentValue(item, itemSchema)
+		}
+		return items
+	case "integer", "number":
+		if text, ok := value.(string); ok {
+			number := json.Number(strings.TrimSpace(text))
+			if kind == "integer" {
+				if parsed, err := number.Int64(); err == nil {
+					return parsed
 				}
+			} else if parsed, err := number.Float64(); err == nil {
+				return parsed
 			}
-		case "boolean":
-			if text, ok := current.(string); ok {
-				switch strings.ToLower(strings.TrimSpace(text)) {
-				case "true":
-					value[key] = true
-				case "false":
-					value[key] = false
-				}
+		}
+	case "boolean":
+		if text, ok := value.(string); ok {
+			switch strings.ToLower(strings.TrimSpace(text)) {
+			case "true":
+				return true
+			case "false":
+				return false
 			}
 		}
 	}
 	return value
+}
+
+func unwrapArgumentEnvelope(value map[string]any, properties map[string]any) map[string]any {
+	for key := range value {
+		if _, known := properties[key]; known {
+			return value
+		}
+	}
+	for _, key := range []string{"arguments", "input", "params", "parameters"} {
+		if _, schemaProperty := properties[key]; schemaProperty {
+			continue
+		}
+		nested, exists := value[key]
+		if !exists {
+			continue
+		}
+		if object, ok := argumentObject(nested); ok {
+			return object
+		}
+	}
+	return value
+}
+
+func normalizePropertyNames(value map[string]any, properties map[string]any) map[string]any {
+	if len(value) == 0 || len(properties) == 0 {
+		return value
+	}
+	aliases := make(map[string]string, len(properties))
+	ambiguous := make(map[string]bool)
+	for property := range properties {
+		alias := normalizedParameterName(property)
+		if existing, found := aliases[alias]; found && existing != property {
+			ambiguous[alias] = true
+			continue
+		}
+		aliases[alias] = property
+	}
+	normalized := make(map[string]any, len(value))
+	for key, current := range value {
+		if _, exact := properties[key]; exact {
+			normalized[key] = current
+		}
+	}
+	for key, current := range value {
+		if _, exact := properties[key]; exact {
+			continue
+		}
+		alias := normalizedParameterName(key)
+		property, found := aliases[alias]
+		if found && !ambiguous[alias] {
+			if _, occupied := normalized[property]; !occupied {
+				normalized[property] = current
+				continue
+			}
+		}
+		normalized[key] = current
+	}
+	return normalized
+}
+
+func normalizedParameterName(value string) string {
+	var out strings.Builder
+	for _, char := range strings.ToLower(value) {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
+			out.WriteRune(char)
+		}
+	}
+	return out.String()
+}
+
+func argumentObject(value any) (map[string]any, bool) {
+	if object, ok := value.(map[string]any); ok {
+		return object, true
+	}
+	if text, ok := value.(string); ok {
+		var object map[string]any
+		if json.Unmarshal([]byte(text), &object) == nil {
+			return object, true
+		}
+	}
+	return nil, false
+}
+
+func argumentKeySummary(value map[string]any) string {
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		return "none"
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 func validateArguments(value any, schema map[string]any, path string) error {
