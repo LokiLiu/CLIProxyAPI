@@ -35,6 +35,59 @@ func TestNormalizeToolCallIgnoresServerMarker(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolCallInfersConcreteToolFromBareMCPServerName(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{
+			{Name: "bash", SDKName: "bash", Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{
+					"command":     map[string]any{"type": "string"},
+					"description": map[string]any{"type": "string"},
+					"timeoutMs":   map[string]any{"type": "integer"},
+				}, "required": []any{"command"},
+			}},
+			{Name: "job_output", SDKName: "job_output", Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{
+					"job_id":     map[string]any{"type": "string"},
+					"timeout_ms": map[string]any{"type": "integer"},
+				}, "required": []any{"job_id"},
+			}},
+		},
+		NameBySDK:   map[string]string{"bash": "bash", "job_output": "job_output"},
+		PassThrough: true,
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{
+		Type: "tool_use", ID: "call_1", Name: "mcp__openai_tools",
+		Input: json.RawMessage(`{"command":"echo ok","description":"run command","timeoutMs":"30000"}`),
+	}, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keep || call.Name != "bash" || string(call.Arguments) != `{"command":"echo ok","description":"run command","timeoutMs":"30000"}` {
+		t.Fatalf("unexpected call: %#v", call)
+	}
+}
+
+func TestNormalizeToolCallDoesNotGuessAmbiguousBareMCPServerName(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{
+			{Name: "first", SDKName: "first", Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}},
+			}},
+			{Name: "second", SDKName: "second", Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}},
+			}},
+		},
+		NameBySDK:   map[string]string{"first": "first", "second": "second"},
+		PassThrough: true,
+	}
+	_, keep, err := normalizeToolCall(qoderBlock{
+		Type: "tool_use", Name: "mcp__openai_tools", Input: json.RawMessage(`{"value":"same shape"}`),
+	}, plan)
+	if err != nil || keep {
+		t.Fatalf("keep=%v err=%v", keep, err)
+	}
+}
+
 func TestNormalizeToolCallRejectsUnknownWrapper(t *testing.T) {
 	_, _, err := normalizeToolCall(qoderBlock{Type: "tool_use", Name: "tool_calls", Input: json.RawMessage(`{"name":"bash"}`)}, ToolPlan{})
 	if err == nil {

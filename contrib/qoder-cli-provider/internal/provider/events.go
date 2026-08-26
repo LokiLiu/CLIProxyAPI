@@ -123,14 +123,17 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 		if nested, ok := input["function"].(map[string]any); ok && name == "" {
 			name, _ = nested["name"].(string)
 		}
-		if name == "" {
-			return ToolCall{}, false, nil
-		}
 		for _, key := range []string{"arguments", "input", "params", "parameters"} {
 			if nested, exists := input[key]; exists {
 				input = anyArguments(nested)
 				break
 			}
+		}
+		if name == "" {
+			name = inferWrappedToolName(input, plan)
+		}
+		if name == "" {
+			return ToolCall{}, false, nil
 		}
 	}
 	name = unprefixToolName(name)
@@ -156,6 +159,67 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 		id = completionID("call")
 	}
 	return ToolCall{ID: id, Name: original, Arguments: arguments}, true, nil
+}
+
+// inferWrappedToolName recovers the concrete function when Qoder emits the MCP
+// server name (mcp__openai_tools) as the tool name. The recovery is deliberately
+// conservative: arguments must validate against exactly one declared schema and
+// must contain at least one property from that schema. This avoids turning an MCP
+// server marker or an ambiguous payload into an arbitrary caller tool.
+func inferWrappedToolName(input map[string]any, plan ToolPlan) string {
+	if plan.SelectedSDK != "" {
+		return plan.SelectedSDK
+	}
+	type candidate struct {
+		name  string
+		score int
+	}
+	candidates := make([]candidate, 0, len(plan.Specs))
+	bestScore := 0
+	for _, spec := range plan.Specs {
+		normalized := normalizeArguments(cloneArguments(input), spec.Parameters)
+		if err := validateArguments(normalized, spec.Parameters, "arguments"); err != nil {
+			continue
+		}
+		score := argumentPropertyMatchScore(normalized, spec.Parameters)
+		if score == 0 {
+			continue
+		}
+		if score > bestScore {
+			bestScore = score
+			candidates = candidates[:0]
+		}
+		if score == bestScore {
+			candidates = append(candidates, candidate{name: spec.SDKName, score: score})
+		}
+	}
+	if len(candidates) == 1 {
+		return candidates[0].name
+	}
+	return ""
+}
+
+func cloneArguments(input map[string]any) map[string]any {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return input
+	}
+	var cloned map[string]any
+	if json.Unmarshal(raw, &cloned) != nil {
+		return input
+	}
+	return cloned
+}
+
+func argumentPropertyMatchScore(input map[string]any, schema map[string]any) int {
+	properties, _ := schema["properties"].(map[string]any)
+	score := 0
+	for key := range input {
+		if _, known := properties[key]; known {
+			score++
+		}
+	}
+	return score
 }
 
 func NormalizeExternalToolCall(id, name string, input any, plan ToolPlan) (ToolCall, error) {
