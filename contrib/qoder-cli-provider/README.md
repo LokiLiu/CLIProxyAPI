@@ -6,6 +6,13 @@ For Qoder, prefer the Anthropic Messages API at `/v1/messages`. It preserves nat
 
 Qoder built-in tools, settings, project context, and built-in skills are disabled. Kiro runs in an isolated temporary workspace and its ACP permission handler rejects tools not supplied by the caller. Request tools are exposed through a temporary MCP server and returned to the upstream agent as standard tool calls. The bridge never executes those tools.
 
+For streaming requests, the Qoder provider buffers only the response bootstrap: it
+does not commit HTTP 200 or emit `message_start` until qodercli produces text, a
+tool call, or a complete successful response. If qodercli exhausts its internal
+model-queue recovery before producing output, the provider returns HTTP 529 so
+Anthropic-compatible clients can apply their normal bounded overload retry. No
+conversation content is compacted, rewritten, or replayed by the provider.
+
 ## Build on macOS
 
 ```bash

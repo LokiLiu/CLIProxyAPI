@@ -53,7 +53,13 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-const pluginIdentifier = "qoder"
+const (
+	pluginIdentifier = "qoder"
+	// Anthropic uses 529 for overloaded_error. Keeping queue exhaustion out of
+	// CLIProxyAPI's 503 credential-retry bucket also avoids replaying the same
+	// qodercli account several times before the Anthropic client can back off.
+	anthropicOverloadedStatus = 529
+)
 
 type envelope struct {
 	OK     bool            `json:"ok"`
@@ -317,15 +323,105 @@ func executeStream(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	go runStream(request.StreamID, account, invocation, format)
+	ctx, cancel := streamContext(request.StreamID)
+	bootstrap, err := preflightProviderRun(ctx, account, invocation)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	go func() {
+		defer cancel()
+		runStream(ctx, request.StreamID, invocation, format, bootstrap)
+	}()
 	return okEnvelope(map[string]any{"headers": http.Header{"Content-Type": []string{"text/event-stream"}}})
 }
 
-func runStream(streamID string, account provider.Account, invocation provider.Invocation, format string) {
-	ctx, cancel := streamContext(streamID)
-	defer cancel()
+type providerRunOutcome struct {
+	result provider.Result
+	err    error
+}
+
+type providerRunBootstrap struct {
+	firstText string
+	texts     <-chan string
+	done      <-chan providerRunOutcome
+	completed *providerRunOutcome
+}
+
+type providerRunFunc func(provider.TextHandler) (provider.Result, error)
+
+// preflightProviderRun keeps the HTTP response uncommitted until qodercli has
+// produced useful output or a complete result. This matters for Anthropic SDK
+// clients: they retry an initial 5xx response, but cannot retry a failure that
+// arrives after a 200 response and message_start event.
+func preflightProviderRun(ctx context.Context, account provider.Account, invocation provider.Invocation) (*providerRunBootstrap, error) {
+	return preflightRun(ctx, func(onText provider.TextHandler) (provider.Result, error) {
+		return provider.Run(ctx, account, invocation, onText)
+	})
+}
+
+func preflightRun(ctx context.Context, run providerRunFunc) (*providerRunBootstrap, error) {
+	texts := make(chan string)
+	done := make(chan providerRunOutcome, 1)
+	go func() {
+		result, err := run(func(text string) error {
+			select {
+			case texts <- text:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+		done <- providerRunOutcome{result: result, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case text := <-texts:
+		return &providerRunBootstrap{firstText: text, texts: texts, done: done}, nil
+	case outcome := <-done:
+		if outcome.err != nil {
+			return nil, outcome.err
+		}
+		return &providerRunBootstrap{completed: &outcome}, nil
+	}
+}
+
+func (bootstrap *providerRunBootstrap) consume(ctx context.Context, onText provider.TextHandler) (provider.Result, error) {
+	if bootstrap == nil {
+		return provider.Result{}, fmt.Errorf("qoder stream bootstrap is nil")
+	}
+	if bootstrap.completed != nil {
+		if bootstrap.completed.result.Text != "" {
+			if err := onText(bootstrap.completed.result.Text); err != nil {
+				return provider.Result{}, err
+			}
+		}
+		return bootstrap.completed.result, bootstrap.completed.err
+	}
+	if bootstrap.firstText != "" {
+		if err := onText(bootstrap.firstText); err != nil {
+			return provider.Result{}, err
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return provider.Result{}, ctx.Err()
+		case text := <-bootstrap.texts:
+			if err := onText(text); err != nil {
+				return provider.Result{}, err
+			}
+		case outcome := <-bootstrap.done:
+			return outcome.result, outcome.err
+		}
+	}
+}
+
+func runStream(ctx context.Context, streamID string, invocation provider.Invocation, format string, bootstrap *providerRunBootstrap) {
 	if format == "claude" {
-		runAnthropicStream(ctx, streamID, account, invocation)
+		runAnthropicStream(ctx, streamID, invocation, bootstrap)
 		return
 	}
 	completionID := fmt.Sprintf("chatcmpl_%x", time.Now().UnixNano())
@@ -333,7 +429,7 @@ func runStream(streamID string, account provider.Account, invocation provider.In
 		closeStream(streamID, err)
 		return
 	}
-	result, err := provider.Run(ctx, account, invocation, func(text string) error {
+	result, err := bootstrap.consume(ctx, func(text string) error {
 		return emitStream(streamID, provider.EncodeStreamText(completionID, invocation.Model, text))
 	})
 	if err != nil {
@@ -344,7 +440,7 @@ func runStream(streamID string, account provider.Account, invocation provider.In
 	closeStream(streamID, err)
 }
 
-func runAnthropicStream(ctx context.Context, streamID string, account provider.Account, invocation provider.Invocation) {
+func runAnthropicStream(ctx context.Context, streamID string, invocation provider.Invocation, bootstrap *providerRunBootstrap) {
 	messageID := fmt.Sprintf("msg_%x", time.Now().UnixNano())
 	if err := emitStream(streamID, provider.EncodeAnthropicStreamEvent("message_start", map[string]any{
 		"type": "message_start",
@@ -360,7 +456,7 @@ func runAnthropicStream(ctx context.Context, streamID string, account provider.A
 
 	textStarted := false
 	textIndex := 0
-	result, err := provider.Run(ctx, account, invocation, func(text string) error {
+	result, err := bootstrap.consume(ctx, func(text string) error {
 		if !textStarted {
 			if errStart := emitStream(streamID, provider.EncodeAnthropicStreamEvent("content_block_start", map[string]any{
 				"type": "content_block_start", "index": textIndex,
@@ -604,12 +700,21 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 
 func retryableError(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "intention_rejected") || strings.Contains(message, "requested_range_not_satisfiable")
+	return strings.Contains(message, "intention_rejected") ||
+		strings.Contains(message, "requested_range_not_satisfiable") ||
+		strings.Contains(message, "model queue recovery attempts exceeded")
 }
 
 func pluginErrorDetails(err error) (string, int) {
-	if err != nil && strings.Contains(strings.ToLower(err.Error()), "invalid model \"") {
+	message := ""
+	if err != nil {
+		message = strings.ToLower(err.Error())
+	}
+	if strings.Contains(message, "invalid model \"") {
 		return "model_not_found", http.StatusBadRequest
+	}
+	if strings.Contains(message, "model queue recovery attempts exceeded") {
+		return "provider_overloaded", anthropicOverloadedStatus
 	}
 	return "plugin_error", http.StatusBadGateway
 }

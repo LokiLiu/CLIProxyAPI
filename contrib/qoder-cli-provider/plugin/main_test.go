@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"testing"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/contrib/qoder-cli-provider/internal/provider"
 )
 
 func TestPluginRegistrationSupportsNativeClaudeMessages(t *testing.T) {
@@ -33,5 +37,56 @@ func TestPluginErrorDetailsKeepsOtherFailuresAsBadGateway(t *testing.T) {
 	code, status := pluginErrorDetails(errors.New("unexpected EOF"))
 	if code != "plugin_error" || status != http.StatusBadGateway {
 		t.Fatalf("pluginErrorDetails() = (%q, %d), want (%q, %d)", code, status, "plugin_error", http.StatusBadGateway)
+	}
+}
+
+func TestPluginErrorDetailsClassifiesExhaustedModelQueueAsRetryableOverload(t *testing.T) {
+	err := errors.New("qodercli request failed: model queue recovery attempts exceeded")
+	code, status := pluginErrorDetails(err)
+	if code != "provider_overloaded" || status != anthropicOverloadedStatus {
+		t.Fatalf("pluginErrorDetails() = (%q, %d), want (%q, %d)", code, status, "provider_overloaded", anthropicOverloadedStatus)
+	}
+	if !retryableError(err) {
+		t.Fatal("model queue exhaustion should be retryable")
+	}
+}
+
+func TestPreflightRunReturnsFailureBeforeCommittingStream(t *testing.T) {
+	want := errors.New("model queue recovery attempts exceeded")
+	bootstrap, err := preflightRun(context.Background(), func(provider.TextHandler) (provider.Result, error) {
+		return provider.Result{}, want
+	})
+	if !errors.Is(err, want) || bootstrap != nil {
+		t.Fatalf("preflightRun() = (%#v, %v), want (nil, %v)", bootstrap, err, want)
+	}
+}
+
+func TestPreflightRunBuffersFirstTextAndContinuesStreaming(t *testing.T) {
+	wantResult := provider.Result{Model: "Aria", FinishReason: "stop"}
+	bootstrap, err := preflightRun(context.Background(), func(onText provider.TextHandler) (provider.Result, error) {
+		if errText := onText("first"); errText != nil {
+			return provider.Result{}, errText
+		}
+		if errText := onText("second"); errText != nil {
+			return provider.Result{}, errText
+		}
+		return wantResult, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	gotResult, err := bootstrap.consume(context.Background(), func(text string) error {
+		texts = append(texts, text)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(texts, []string{"first", "second"}) {
+		t.Fatalf("streamed texts = %#v", texts)
+	}
+	if !reflect.DeepEqual(gotResult, wantResult) {
+		t.Fatalf("result = %#v, want %#v", gotResult, wantResult)
 	}
 }
