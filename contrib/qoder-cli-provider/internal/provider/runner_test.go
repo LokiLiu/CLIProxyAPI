@@ -36,6 +36,35 @@ func TestConsumeEventsRejectsAuthenticationFailure(t *testing.T) {
 	}
 }
 
+func TestConsumeEventsForwardsPermissionRequestAsCallerTool(t *testing.T) {
+	events := make(chan qoderEvent, 1)
+	event := qoderEvent{Type: "control_request"}
+	event.Request.Subtype = "can_use_tool"
+	event.Request.ToolName = "quick_search"
+	event.Request.ToolUseID = "call-search-1"
+	event.Request.Input = json.RawMessage(`{"query":"wheel build","time_range":"OneMonth"}`)
+	events <- event
+
+	result, err := consumeEvents(context.Background(), events, nil, nil, Invocation{
+		Model: "Aria",
+		Tools: ToolPlan{
+			Specs:       []ToolSpec{{Name: "quick_search", SDKName: "quick_search"}},
+			NameBySDK:   map[string]string{"quick_search": "quick_search"},
+			PassThrough: true,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinishReason != "tool_calls" || len(result.ToolCalls) != 1 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	call := result.ToolCalls[0]
+	if call.ID != "call-search-1" || call.Name != "quick_search" || string(call.Arguments) != `{"query":"wheel build","time_range":"OneMonth"}` {
+		t.Fatalf("unexpected forwarded tool call: %#v", call)
+	}
+}
+
 func TestToolCallbackPreservesExactToolNameAndArguments(t *testing.T) {
 	plan := ToolPlan{
 		Specs:       []ToolSpec{{Name: "job_output", SDKName: "job_output"}},

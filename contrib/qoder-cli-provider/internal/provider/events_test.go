@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,45 @@ func TestAssistantResultIgnoresLossyToolMarkersWhenMCPCallbackIsAuthoritative(t 
 	_, calls, _, err := assistantResult(event, ToolPlan{}, false)
 	if err != nil || len(calls) != 0 {
 		t.Fatalf("calls=%#v err=%v", calls, err)
+	}
+}
+
+func TestControlPermissionRequestBecomesDeclaredExternalToolCall(t *testing.T) {
+	var event qoderEvent
+	err := json.Unmarshal([]byte(`{
+		"type":"control_request",
+		"request_id":"permission-1",
+		"request":{
+			"subtype":"can_use_tool",
+			"tool_name":"quick_search",
+			"tool_use_id":"call-search-1",
+			"input":{"query":"wheel build","time_range":"OneMonth"}
+		}
+	}`), &event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := ToolPlan{
+		Specs:       []ToolSpec{{Name: "quick_search", SDKName: "quick_search"}},
+		NameBySDK:   map[string]string{"quick_search": "quick_search"},
+		PassThrough: true,
+	}
+	call, keep, err := event.externalToolCall(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keep || call.ID != "call-search-1" || call.Name != "quick_search" || string(call.Arguments) != `{"query":"wheel build","time_range":"OneMonth"}` {
+		t.Fatalf("unexpected control-request tool call: %#v", call)
+	}
+}
+
+func TestControlPermissionRequestRejectsUndeclaredTool(t *testing.T) {
+	event := qoderEvent{Type: "control_request"}
+	event.Request.Subtype = "can_use_tool"
+	event.Request.ToolName = "quick_search"
+	_, _, err := event.externalToolCall(ToolPlan{NameBySDK: map[string]string{"bash": "bash"}})
+	if err == nil || !strings.Contains(err.Error(), "unknown external tool") {
+		t.Fatalf("externalToolCall() error = %v", err)
 	}
 }
 

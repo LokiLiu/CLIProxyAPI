@@ -18,10 +18,13 @@ type qoderEvent struct {
 	Message qoderMessage    `json:"message"`
 	Usage   qoderUsage      `json:"usage"`
 	Request struct {
-		RequestID string `json:"request_id"`
-		Type      string `json:"type"`
-		Subtype   string `json:"subtype"`
-		ToolName  string `json:"tool_name"`
+		RequestID string          `json:"request_id"`
+		Type      string          `json:"type"`
+		Subtype   string          `json:"subtype"`
+		ToolName  string          `json:"tool_name"`
+		ToolUseID string          `json:"tool_use_id"`
+		Input     json.RawMessage `json:"input"`
+		Arguments json.RawMessage `json:"arguments"`
 	} `json:"request"`
 	RequestID string `json:"request_id"`
 	Response  struct {
@@ -35,6 +38,19 @@ func (event qoderEvent) controlRequestType() string {
 		return event.Request.Subtype
 	}
 	return event.Request.Type
+}
+
+func (event qoderEvent) externalToolCall(plan ToolPlan) (ToolCall, bool, error) {
+	input := event.Request.Input
+	if len(input) == 0 || string(input) == "null" {
+		input = event.Request.Arguments
+	}
+	return normalizeToolCall(qoderBlock{
+		Type:  "tool_use",
+		ID:    event.Request.ToolUseID,
+		Name:  event.Request.ToolName,
+		Input: input,
+	}, plan)
 }
 
 type qoderMessage struct {

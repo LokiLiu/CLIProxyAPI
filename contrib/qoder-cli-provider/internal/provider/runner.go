@@ -329,7 +329,20 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 			}
 			resetTimer(idle, qoderStreamIdleTimeout)
 			if event.Type == "control_request" && event.controlRequestType() == "can_use_tool" {
-				return Result{}, fmt.Errorf("qodercli unexpectedly requested interactive permission for external tool %q", event.Request.ToolName)
+				// Some Qoder builds emit caller tools as a bare can_use_tool request
+				// instead of invoking the MCP bridge. Convert only tools declared by
+				// the upstream harness into a normal tool call; never authorize Qoder
+				// to execute the tool itself.
+				call, keep, callErr := event.externalToolCall(invocation.Tools)
+				if callErr != nil {
+					return Result{}, callErr
+				}
+				if !keep {
+					return Result{}, fmt.Errorf("qodercli requested undeclared external tool %q", event.Request.ToolName)
+				}
+				result.ToolCalls = []ToolCall{call}
+				result.FinishReason = "tool_calls"
+				return finalizeUsage(result, invocation), nil
 			}
 			if event.Type == "assistant" && strings.TrimSpace(event.Error) != "" {
 				return Result{}, fmt.Errorf("qodercli request failed: %s", strings.TrimSpace(event.Error))
