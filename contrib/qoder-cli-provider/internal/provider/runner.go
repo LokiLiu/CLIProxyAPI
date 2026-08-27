@@ -142,6 +142,36 @@ func commandArgs(account Account, invocation Invocation, callback *toolCallbackS
 		"--disable-builtin-skills",
 		"--system-prompt", invocation.SystemPrompt,
 	}
+	cleanupPaths := make([]string, 0, len(invocation.Attachments)+1)
+	cleanup := func() {
+		for index := len(cleanupPaths) - 1; index >= 0; index-- {
+			_ = os.Remove(cleanupPaths[index])
+		}
+	}
+	attachmentDir := ""
+	if len(invocation.Attachments) > 0 {
+		var err error
+		attachmentDir, err = os.MkdirTemp("", "qoder-attachments-*")
+		if err != nil {
+			return nil, func() {}, fmt.Errorf("create qoder attachment directory: %w", err)
+		}
+		cleanupPaths = append(cleanupPaths, attachmentDir)
+	}
+	for _, attachment := range invocation.Attachments {
+		extension, ok := imageExtension(attachment.MediaType)
+		if !ok {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("unsupported attachment media type %q", attachment.MediaType)
+		}
+		fileName := strings.TrimSuffix(filepath.Base(attachment.FileName), filepath.Ext(attachment.FileName)) + extension
+		path := filepath.Join(attachmentDir, fileName)
+		cleanupPaths = append(cleanupPaths, path)
+		if err := os.WriteFile(path, attachment.Data, 0o600); err != nil {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("write qoder attachment: %w", err)
+		}
+		args = append(args, "--attachment", path)
+	}
 	if invocation.MaxTokens > 0 {
 		args = append(args, "--max-output-tokens", fmt.Sprint(invocation.MaxTokens))
 	}
@@ -149,15 +179,18 @@ func commandArgs(account Account, invocation Invocation, callback *toolCallbackS
 		args = append(args, "--config-dir", account.ConfigDir)
 	}
 	if len(invocation.Tools.Specs) == 0 {
-		return args, func() {}, nil
+		return args, cleanup, nil
 	}
 	if account.BridgePath == "" {
+		cleanup()
 		return nil, func() {}, fmt.Errorf("qoder auth %q requires bridge_path when tools are supplied", account.ID)
 	}
 	configFile, err := writeMCPConfig(account.BridgePath, invocation.Tools.Specs, callback)
 	if err != nil {
+		cleanup()
 		return nil, func() {}, err
 	}
+	cleanupPaths = append(cleanupPaths, configFile)
 	args = append(args,
 		"--mcp-config", configFile,
 		"--strict-mcp-config",
@@ -167,7 +200,7 @@ func commandArgs(account Account, invocation Invocation, callback *toolCallbackS
 	for _, spec := range invocation.Tools.Specs {
 		args = append(args, "--allowed-tools", "mcp__openai_tools__"+spec.SDKName)
 	}
-	return args, func() { _ = os.Remove(configFile) }, nil
+	return args, cleanup, nil
 }
 
 func writeMCPConfig(bridgePath string, tools []ToolSpec, callback *toolCallbackServer) (string, error) {

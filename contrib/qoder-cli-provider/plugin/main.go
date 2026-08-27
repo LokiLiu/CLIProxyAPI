@@ -717,10 +717,23 @@ func pluginErrorDetails(err error) (string, int) {
 	if strings.Contains(message, "model queue recovery attempts exceeded") {
 		return "provider_overloaded", anthropicOverloadedStatus
 	}
+	if isInputValidationError(message) {
+		return "request_scoped", http.StatusBadRequest
+	}
 	if isToolProtocolError(message) {
 		return "request_scoped", http.StatusBadGateway
 	}
 	return "plugin_error", http.StatusBadGateway
+}
+
+func isInputValidationError(message string) bool {
+	return strings.Contains(message, "unsupported image") ||
+		strings.Contains(message, "image attachment") ||
+		strings.Contains(message, "image attachments exceed") ||
+		strings.Contains(message, "image url") ||
+		strings.Contains(message, "does not support document message input") ||
+		strings.Contains(message, "does not support audio message input") ||
+		strings.Contains(message, "does not support input_audio message input")
 }
 
 func isToolProtocolError(message string) bool {

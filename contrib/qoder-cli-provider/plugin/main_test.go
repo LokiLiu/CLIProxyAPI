@@ -68,6 +68,17 @@ func TestPluginErrorDetailsKeepsMalformedToolOutputRequestScoped(t *testing.T) {
 	}
 }
 
+func TestPluginErrorDetailsKeepsInvalidImageInputRequestScoped(t *testing.T) {
+	err := errors.New(`unsupported image media type "image/svg+xml"`)
+	code, status := pluginErrorDetails(err)
+	if code != "request_scoped" || status != http.StatusBadRequest {
+		t.Fatalf("pluginErrorDetails() = (%q, %d)", code, status)
+	}
+	if retryableError(err) {
+		t.Fatal("invalid image input must not be retried")
+	}
+}
+
 func TestPreflightRunReturnsFailureBeforeCommittingStream(t *testing.T) {
 	want := errors.New("model queue recovery attempts exceeded")
 	bootstrap, err := preflightRun(context.Background(), func(provider.TextHandler) (provider.Result, error) {

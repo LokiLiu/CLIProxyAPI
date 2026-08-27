@@ -43,6 +43,7 @@ type Invocation struct {
 	Prompt       string
 	MaxTokens    int
 	Tools        ToolPlan
+	Attachments  []Attachment
 }
 
 type ToolCall struct {

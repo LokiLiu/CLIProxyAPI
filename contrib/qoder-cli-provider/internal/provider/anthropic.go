@@ -56,12 +56,13 @@ func BuildAnthropicInvocation(raw []byte, routedModel string) (Invocation, error
 		return Invocation{}, errSystem
 	}
 	conversation := make([]map[string]any, 0, len(request.Messages))
+	attachments := make([]Attachment, 0)
 	for _, message := range request.Messages {
 		role := strings.ToLower(strings.TrimSpace(message.Role))
 		if role != "user" && role != "assistant" {
 			return Invocation{}, fmt.Errorf("unsupported Messages role %q", message.Role)
 		}
-		content, errContent := normalizeAnthropicContent(message.Content, role)
+		content, errContent := normalizeAnthropicContent(message.Content, role, &attachments)
 		if errContent != nil {
 			return Invocation{}, errContent
 		}
@@ -82,6 +83,7 @@ func BuildAnthropicInvocation(raw []byte, routedModel string) (Invocation, error
 		Prompt:       "Return only the next assistant message for this Anthropic Messages conversation.\n\n" + string(conversationJSON),
 		MaxTokens:    request.MaxTokens,
 		Tools:        plan,
+		Attachments:  attachments,
 	}, nil
 }
 
@@ -135,7 +137,7 @@ func buildAnthropicToolPlan(tools []anthropicTool, choice anthropicToolChoice) (
 	}
 }
 
-func normalizeAnthropicContent(raw json.RawMessage, role string) (any, error) {
+func normalizeAnthropicContent(raw json.RawMessage, role string, attachments *[]Attachment) (any, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return []any{}, nil
 	}
@@ -147,7 +149,7 @@ func normalizeAnthropicContent(raw json.RawMessage, role string) (any, error) {
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return nil, fmt.Errorf("%s message content must be text or an array of content blocks", role)
 	}
-	for _, block := range blocks {
+	for index, block := range blocks {
 		kind, _ := block["type"].(string)
 		switch kind {
 		case "text":
@@ -163,8 +165,32 @@ func normalizeAnthropicContent(raw json.RawMessage, role string) (any, error) {
 			if role != "assistant" {
 				return nil, fmt.Errorf("%s block is only valid in assistant messages", kind)
 			}
-		case "image", "document":
-			return nil, fmt.Errorf("qoder CLI provider does not support %s message input", kind)
+		case "image":
+			if role != "user" {
+				return nil, fmt.Errorf("image block is only valid in user messages")
+			}
+			source, _ := block["source"].(map[string]any)
+			sourceType, _ := source["type"].(string)
+			switch strings.ToLower(strings.TrimSpace(sourceType)) {
+			case "base64":
+				mediaType, _ := source["media_type"].(string)
+				data, _ := source["data"].(string)
+				marker, err := appendBase64Image(attachments, mediaType, data)
+				if err != nil {
+					return nil, err
+				}
+				blocks[index] = map[string]any{"type": "text", "text": marker}
+			case "url":
+				url, _ := source["url"].(string)
+				if strings.TrimSpace(url) == "" {
+					return nil, fmt.Errorf("image URL is required")
+				}
+				blocks[index] = map[string]any{"type": "text", "text": "[Image URL: " + url + "]"}
+			default:
+				return nil, fmt.Errorf("unsupported image source type %q", sourceType)
+			}
+		case "document":
+			return nil, fmt.Errorf("qoder CLI provider does not support document message input")
 		default:
 			return nil, fmt.Errorf("unsupported Anthropic message content type %q", kind)
 		}

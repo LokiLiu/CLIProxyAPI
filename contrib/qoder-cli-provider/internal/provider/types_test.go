@@ -55,13 +55,19 @@ func TestBuildInvocationPreservesConversationAndTools(t *testing.T) {
 	}
 }
 
-func TestBuildInvocationRejectsImageInput(t *testing.T) {
-	_, err := BuildInvocation([]byte(`{
+func TestBuildInvocationConvertsDataImageToAttachment(t *testing.T) {
+	invocation, err := BuildInvocation([]byte(`{
   "model":"Aria",
-  "messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/a.png"}}]}]
+  "messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]}]
 }`), "Aria")
-	if err == nil {
-		t.Fatal("expected image input to be rejected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invocation.Attachments) != 1 || invocation.Attachments[0].MediaType != "image/png" {
+		t.Fatalf("attachments = %#v", invocation.Attachments)
+	}
+	if !strings.Contains(invocation.Prompt, "[Attached image: image-001.png]") || strings.Contains(invocation.Prompt, "iVBOR") {
+		t.Fatalf("prompt did not replace image data: %s", invocation.Prompt)
 	}
 }
 
@@ -93,12 +99,18 @@ func TestBuildAnthropicInvocationPreservesToolBlocks(t *testing.T) {
 	}
 }
 
-func TestBuildAnthropicInvocationRejectsImageInput(t *testing.T) {
-	_, err := BuildAnthropicInvocation([]byte(`{
+func TestBuildAnthropicInvocationConvertsBase64ImageToAttachment(t *testing.T) {
+	invocation, err := BuildAnthropicInvocation([]byte(`{
   "model":"Aria",
-  "messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]
+  "messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}},{"type":"text","text":"describe it"}]}]
 }`), "Aria")
-	if err == nil {
-		t.Fatal("expected Anthropic image input to be rejected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invocation.Attachments) != 1 || invocation.Attachments[0].FileName != "image-001.png" {
+		t.Fatalf("attachments = %#v", invocation.Attachments)
+	}
+	if !strings.Contains(invocation.Prompt, "[Attached image: image-001.png]") || strings.Contains(invocation.Prompt, "iVBOR") {
+		t.Fatalf("prompt did not replace image data: %s", invocation.Prompt)
 	}
 }

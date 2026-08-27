@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,8 +26,6 @@ func TestConsumeEventsRejectsAuthenticationFailure(t *testing.T) {
 	events := make(chan qoderEvent, 1)
 	errs := make(chan error, 1)
 	events <- qoderEvent{Type: "assistant", Error: "authentication_failed"}
-	close(events)
-	errs <- io.EOF
 	_, err := consumeEvents(context.Background(), events, errs, nil, Invocation{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "authentication_failed") {
 		t.Fatalf("consumeEvents() error = %v", err)
@@ -128,6 +127,35 @@ func TestCommandArgsBypassPermissionsOnlyForCallerTools(t *testing.T) {
 	defer cleanup()
 	if joined := strings.Join(withTools, " "); !strings.Contains(joined, "--permission-mode bypass_permissions") {
 		t.Fatalf("caller tools did not enable non-interactive permissions: %s", joined)
+	}
+}
+
+func TestCommandArgsWritesAndCleansImageAttachments(t *testing.T) {
+	args, cleanup, err := commandArgs(Account{}, Invocation{Attachments: []Attachment{{
+		FileName: "image-001.png", MediaType: "image/png", Data: []byte("png-data"),
+	}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachmentPath := ""
+	for index, arg := range args {
+		if arg == "--attachment" && index+1 < len(args) {
+			attachmentPath = args[index+1]
+			break
+		}
+	}
+	if attachmentPath == "" {
+		cleanup()
+		t.Fatalf("args did not contain --attachment: %#v", args)
+	}
+	data, err := os.ReadFile(attachmentPath)
+	if err != nil || string(data) != "png-data" {
+		cleanup()
+		t.Fatalf("attachment data = %q, err=%v", data, err)
+	}
+	cleanup()
+	if _, err = os.Stat(attachmentPath); !os.IsNotExist(err) {
+		t.Fatalf("attachment still exists after cleanup: %v", err)
 	}
 }
 

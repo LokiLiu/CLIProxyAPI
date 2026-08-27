@@ -65,9 +65,10 @@ func BuildInvocation(raw []byte, routedModel string) (Invocation, error) {
 	}
 	system := make([]string, 0)
 	conversation := make([]map[string]any, 0, len(request.Messages))
+	attachments := make([]Attachment, 0)
 	for _, message := range request.Messages {
 		role := strings.ToLower(strings.TrimSpace(message.Role))
-		content, errContent := contentText(message.Content)
+		content, errContent := contentText(message.Content, &attachments)
 		if errContent != nil {
 			return Invocation{}, errContent
 		}
@@ -113,6 +114,7 @@ func BuildInvocation(raw []byte, routedModel string) (Invocation, error) {
 		Prompt:       prompt,
 		MaxTokens:    request.MaxTokens,
 		Tools:        plan,
+		Attachments:  attachments,
 	}, nil
 }
 
@@ -196,7 +198,7 @@ func toolInstruction(plan ToolPlan) string {
 	return "Use a provided external function when needed. Call concrete function names directly; never call wrappers named tool_calls, function_call, or mcp__openai_tools. The upstream harness executes the functions."
 }
 
-func contentText(raw json.RawMessage) (string, error) {
+func contentText(raw json.RawMessage, attachments *[]Attachment) (string, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return "", nil
 	}
@@ -215,7 +217,35 @@ func contentText(raw json.RawMessage) (string, error) {
 		case "text", "input_text", "output_text":
 			value, _ := part["text"].(string)
 			out.WriteString(value)
-		case "image_url", "input_image", "image", "audio", "input_audio":
+		case "image_url", "input_image", "image":
+			value := ""
+			if imageURL, ok := part["image_url"].(string); ok {
+				value = imageURL
+			} else if imageURL, ok := part["image_url"].(map[string]any); ok {
+				value, _ = imageURL["url"].(string)
+			} else if source, ok := part["source"].(map[string]any); ok {
+				if sourceType, _ := source["type"].(string); strings.EqualFold(sourceType, "base64") {
+					mediaType, _ := source["media_type"].(string)
+					data, _ := source["data"].(string)
+					marker, err := appendBase64Image(attachments, mediaType, data)
+					if err != nil {
+						return "", err
+					}
+					out.WriteString(marker)
+					continue
+				}
+			}
+			if marker, handled, err := parseDataImageURL(value, attachments); handled {
+				if err != nil {
+					return "", err
+				}
+				out.WriteString(marker)
+			} else if strings.TrimSpace(value) != "" {
+				out.WriteString("[Image URL: " + value + "]")
+			} else {
+				return "", fmt.Errorf("image URL or base64 source is required")
+			}
+		case "audio", "input_audio":
 			return "", fmt.Errorf("qoder CLI provider does not support %s message input", kind)
 		default:
 			return "", fmt.Errorf("unsupported message content type %q", kind)
