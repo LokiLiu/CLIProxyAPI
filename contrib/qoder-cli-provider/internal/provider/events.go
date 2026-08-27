@@ -118,10 +118,15 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 	}
 
 	name := unprefixToolName(rawName)
-	if rawName == "mcp__openai_tools" {
+	if isWrappedToolName(rawName) {
 		name = firstArgumentString(input, "tool_name", "toolName", "tool", "name")
-		if nested, ok := input["function"].(map[string]any); ok && name == "" {
-			name, _ = nested["name"].(string)
+		if nested, ok := input["function"].(map[string]any); ok {
+			if name == "" {
+				name, _ = nested["name"].(string)
+			}
+			if nestedArguments, exists := nested["arguments"]; exists {
+				input = anyArguments(nestedArguments)
+			}
 		}
 		for _, key := range []string{"arguments", "input", "params", "parameters"} {
 			if nested, exists := input[key]; exists {
@@ -161,11 +166,20 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 	return ToolCall{ID: id, Name: original, Arguments: arguments}, true, nil
 }
 
-// inferWrappedToolName recovers the concrete function when Qoder emits the MCP
-// server name (mcp__openai_tools) as the tool name. The recovery is deliberately
+func isWrappedToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "mcp__openai_tools", "tool_use", "tool_calls", "function_call":
+		return true
+	default:
+		return false
+	}
+}
+
+// inferWrappedToolName recovers the concrete function when Qoder emits a generic
+// tool wrapper rather than the declared function name. The recovery is deliberately
 // conservative: arguments must validate against exactly one declared schema and
-// must contain at least one property from that schema. This avoids turning an MCP
-// server marker or an ambiguous payload into an arbitrary caller tool.
+// must contain at least one property from that schema. This avoids turning a marker
+// or an ambiguous payload into an arbitrary caller tool.
 func inferWrappedToolName(input map[string]any, plan ToolPlan) string {
 	if plan.SelectedSDK != "" {
 		return plan.SelectedSDK

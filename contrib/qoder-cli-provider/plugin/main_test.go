@@ -51,6 +51,23 @@ func TestPluginErrorDetailsClassifiesExhaustedModelQueueAsRetryableOverload(t *t
 	}
 }
 
+func TestPluginErrorDetailsKeepsMalformedToolOutputRequestScoped(t *testing.T) {
+	for _, message := range []string{
+		`qoder returned unknown external tool "tool_use"`,
+		`qodercli requested undeclared external tool "mcp__openai_tools"`,
+		`qoder returned invalid arguments for tool bash: timeoutMs must be integer`,
+	} {
+		err := errors.New(message)
+		code, status := pluginErrorDetails(err)
+		if code != "request_scoped" || status != http.StatusBadGateway {
+			t.Fatalf("pluginErrorDetails(%q) = (%q, %d)", message, code, status)
+		}
+		if !retryableError(err) {
+			t.Fatalf("retryableError(%q) = false", message)
+		}
+	}
+}
+
 func TestPreflightRunReturnsFailureBeforeCommittingStream(t *testing.T) {
 	want := errors.New("model queue recovery attempts exceeded")
 	bootstrap, err := preflightRun(context.Background(), func(provider.TextHandler) (provider.Result, error) {

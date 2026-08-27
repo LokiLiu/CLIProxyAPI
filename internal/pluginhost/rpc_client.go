@@ -37,6 +37,8 @@ type rpcThinkingApplier struct {
 
 type rpcPluginError struct {
 	message    string
+	code       string
+	retryable  bool
 	statusCode int
 }
 
@@ -46,6 +48,10 @@ func (e rpcPluginError) Error() string {
 
 func (e rpcPluginError) StatusCode() int {
 	return e.statusCode
+}
+
+func (e rpcPluginError) IsRequestScoped() bool {
+	return e.code == "request_scoped"
 }
 
 type rpcResponseNormalizer struct {
@@ -307,8 +313,13 @@ func decodeEnvelopeResult[T any](envelope pluginabi.Envelope) (T, error) {
 			if message == "" {
 				message = "plugin call failed"
 			}
-			if envelope.Error.HTTPStatus > 0 {
-				return zero, rpcPluginError{message: message, statusCode: envelope.Error.HTTPStatus}
+			if envelope.Error.HTTPStatus > 0 || envelope.Error.Code != "" {
+				return zero, rpcPluginError{
+					message:    message,
+					code:       envelope.Error.Code,
+					retryable:  envelope.Error.Retryable,
+					statusCode: envelope.Error.HTTPStatus,
+				}
 			}
 			return zero, fmt.Errorf("%s", message)
 		}

@@ -702,7 +702,8 @@ func retryableError(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "intention_rejected") ||
 		strings.Contains(message, "requested_range_not_satisfiable") ||
-		strings.Contains(message, "model queue recovery attempts exceeded")
+		strings.Contains(message, "model queue recovery attempts exceeded") ||
+		isToolProtocolError(message)
 }
 
 func pluginErrorDetails(err error) (string, int) {
@@ -716,5 +717,16 @@ func pluginErrorDetails(err error) (string, int) {
 	if strings.Contains(message, "model queue recovery attempts exceeded") {
 		return "provider_overloaded", anthropicOverloadedStatus
 	}
+	if isToolProtocolError(message) {
+		return "request_scoped", http.StatusBadGateway
+	}
 	return "plugin_error", http.StatusBadGateway
+}
+
+func isToolProtocolError(message string) bool {
+	return strings.Contains(message, "unknown external tool") ||
+		strings.Contains(message, "undeclared external tool") ||
+		strings.Contains(message, "invalid arguments for tool") ||
+		strings.Contains(message, "did not resolve to a concrete external function") ||
+		strings.Contains(message, "unexpectedly requested interactive permission for external tool")
 }

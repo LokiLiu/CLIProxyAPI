@@ -43,6 +43,25 @@ func TestDecodeEnvelopeResultPreservesPluginHTTPStatus(t *testing.T) {
 	}
 }
 
+func TestDecodeEnvelopeResultPreservesRequestScopedClassification(t *testing.T) {
+	_, errDecode := decodeEnvelopeResult[rpcEmptyResponse](pluginabi.Envelope{
+		OK: false,
+		Error: &pluginabi.Error{
+			Code:       "request_scoped",
+			Message:    "qoder returned an ambiguous tool wrapper",
+			Retryable:  true,
+			HTTPStatus: http.StatusBadGateway,
+		},
+	})
+	if errDecode == nil {
+		t.Fatal("decodeEnvelopeResult returned nil error")
+	}
+	requestScoped, ok := errDecode.(interface{ IsRequestScoped() bool })
+	if !ok || !requestScoped.IsRequestScoped() {
+		t.Fatalf("error %T did not preserve request-scoped classification", errDecode)
+	}
+}
+
 func TestCallPluginReturnsPluginErrorWithoutMethodWrapper(t *testing.T) {
 	raw, errMarshal := json.Marshal(pluginabi.Envelope{
 		OK: false,
