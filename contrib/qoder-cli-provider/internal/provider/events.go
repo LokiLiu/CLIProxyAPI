@@ -177,9 +177,31 @@ func isWrappedToolName(name string) bool {
 }
 
 func canonicalWrappedToolName(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	replacer := strings.NewReplacer("_", "", "-", "", ".", "", " ", "")
-	return replacer.Replace(name)
+	var canonical strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			canonical.WriteRune(r)
+		}
+	}
+	value := canonical.String()
+	for _, wrapper := range []string{"toolcalls", "toolcall", "tooluse", "functioncall"} {
+		if value == wrapper {
+			return wrapper
+		}
+		if strings.HasSuffix(value, wrapper) && isWrappedToolNamespace(strings.TrimSuffix(value, wrapper)) {
+			return wrapper
+		}
+	}
+	return value
+}
+
+func isWrappedToolNamespace(name string) bool {
+	switch name {
+	case "openai", "mcpopenai", "qoder", "anthropic":
+		return true
+	default:
+		return false
+	}
 }
 
 // inferWrappedToolName recovers the concrete function when Qoder emits a generic

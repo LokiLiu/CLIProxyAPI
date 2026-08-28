@@ -59,6 +59,8 @@ func TestNormalizeToolCallInfersConcreteToolFromGenericWrapper(t *testing.T) {
 		"mcp__openai_tools", "MCP-OpenAI-Tools",
 		"tool_use", "ToolUse", "tool-use",
 		"tool_call", "ToolCalls", "functionCall",
+		"OpenAI::tool_call", "OpenAI/tool-calls",
+		"MCP::OpenAI::tool_call", "Qoder.tool_use", "Anthropic function_call",
 	} {
 		t.Run(wrapper, func(t *testing.T) {
 			call, keep, err := normalizeToolCall(qoderBlock{
