@@ -113,12 +113,13 @@ func assistantResult(event qoderEvent, plan ToolPlan, acceptToolCalls bool) (str
 func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) {
 	rawName := strings.TrimSpace(block.Name)
 	input := decodeArguments(block.Input)
-	if rawName == "tool_calls" && len(input) == 0 {
+	if canonicalWrappedToolName(rawName) == "toolcalls" && len(input) == 0 {
 		return ToolCall{}, false, nil
 	}
 
 	name := unprefixToolName(rawName)
-	if isWrappedToolName(rawName) {
+	_, declared := plan.NameBySDK[name]
+	if !declared && isWrappedToolName(rawName) {
 		name = firstArgumentString(input, "tool_name", "toolName", "tool", "name")
 		if nested, ok := input["function"].(map[string]any); ok {
 			if name == "" {
@@ -167,12 +168,18 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 }
 
 func isWrappedToolName(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "mcp__openai_tools", "tool_use", "tool_calls", "function_call":
+	switch canonicalWrappedToolName(name) {
+	case "mcpopenaitools", "tooluse", "toolcall", "toolcalls", "functioncall":
 		return true
 	default:
 		return false
 	}
+}
+
+func canonicalWrappedToolName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	replacer := strings.NewReplacer("_", "", "-", "", ".", "", " ", "")
+	return replacer.Replace(name)
 }
 
 // inferWrappedToolName recovers the concrete function when Qoder emits a generic

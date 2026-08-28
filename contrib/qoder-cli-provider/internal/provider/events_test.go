@@ -55,7 +55,11 @@ func TestNormalizeToolCallInfersConcreteToolFromGenericWrapper(t *testing.T) {
 		NameBySDK:   map[string]string{"bash": "bash", "job_output": "job_output"},
 		PassThrough: true,
 	}
-	for _, wrapper := range []string{"mcp__openai_tools", "tool_use", "tool_calls", "function_call"} {
+	for _, wrapper := range []string{
+		"mcp__openai_tools", "MCP-OpenAI-Tools",
+		"tool_use", "ToolUse", "tool-use",
+		"tool_call", "ToolCalls", "functionCall",
+	} {
 		t.Run(wrapper, func(t *testing.T) {
 			call, keep, err := normalizeToolCall(qoderBlock{
 				Type: "tool_use", ID: "call_1", Name: wrapper,
@@ -68,6 +72,21 @@ func TestNormalizeToolCallInfersConcreteToolFromGenericWrapper(t *testing.T) {
 				t.Fatalf("unexpected call: %#v", call)
 			}
 		})
+	}
+}
+
+func TestNormalizeToolCallPreservesDeclaredToolNamedLikeWrapper(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{{Name: "ToolUse", SDKName: "ToolUse", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}},
+		}}},
+		NameBySDK: map[string]string{"ToolUse": "ToolUse"},
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{
+		Type: "tool_use", Name: "ToolUse", Input: json.RawMessage(`{"value":"literal tool"}`),
+	}, plan)
+	if err != nil || !keep || call.Name != "ToolUse" {
+		t.Fatalf("call=%#v keep=%v err=%v", call, keep, err)
 	}
 }
 
