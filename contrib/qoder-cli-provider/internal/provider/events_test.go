@@ -214,6 +214,22 @@ func TestNormalizeToolCallUnwrapsNestedFunctionCall(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolCallUnwrapsFullTurnEnvelope(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{{Name: "bash", SDKName: "bash", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}}, "required": []any{"command"},
+		}}},
+		NameBySDK: map[string]string{"bash": "bash"},
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{
+		Type: "tool_use", Name: "full_turn",
+		Input: json.RawMessage(`{"tool_name":"bash","arguments":{"command":"echo ok"}}`),
+	}, plan)
+	if err != nil || !keep || call.Name != "bash" || string(call.Arguments) != `{"command":"echo ok"}` {
+		t.Fatalf("call=%#v keep=%v err=%v", call, keep, err)
+	}
+}
+
 func TestNormalizeToolCallIgnoresEmptyToolCallsMarker(t *testing.T) {
 	_, keep, err := normalizeToolCall(qoderBlock{Type: "tool_use", Name: "tool_calls", Input: json.RawMessage(`{}`)}, ToolPlan{})
 	if err != nil || keep {

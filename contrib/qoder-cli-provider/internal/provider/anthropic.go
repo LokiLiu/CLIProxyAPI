@@ -73,6 +73,9 @@ func BuildAnthropicInvocation(raw []byte, routedModel string) (Invocation, error
 	if systemText != "" {
 		systemPrompt += "\n\nSystem instructions:\n" + systemText
 	}
+	if instruction := toolInstruction(plan); instruction != "" {
+		systemPrompt += "\n\n" + instruction
+	}
 	conversationJSON, errMarshal := json.MarshalIndent(map[string]any{"messages": conversation}, "", "  ")
 	if errMarshal != nil {
 		return Invocation{}, fmt.Errorf("encode Messages conversation: %w", errMarshal)

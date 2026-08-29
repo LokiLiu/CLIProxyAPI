@@ -189,13 +189,14 @@ func toolInstruction(plan ToolPlan) string {
 	if len(plan.Specs) == 0 {
 		return "Do not call any tools."
 	}
+	const concreteNames = "Call concrete function names directly; never call wrappers named tool_calls, tool_call, function_call, mcp__openai_tools, or full_turn. The upstream harness executes the functions."
 	if plan.Selected != "" {
-		return fmt.Sprintf("Call the external function %s. Call its concrete function name directly; never call wrappers named tool_calls, function_call, or mcp__openai_tools. The upstream harness executes the function.", plan.Selected)
+		return fmt.Sprintf("Call the external function %s. %s", plan.Selected, concreteNames)
 	}
 	if plan.Required {
-		return "Call at least one provided external function. Call concrete function names directly; never call wrappers named tool_calls, function_call, or mcp__openai_tools. The upstream harness executes the functions."
+		return "Call at least one provided external function. " + concreteNames
 	}
-	return "Use a provided external function when needed. Call concrete function names directly; never call wrappers named tool_calls, function_call, or mcp__openai_tools. The upstream harness executes the functions."
+	return "Use a provided external function when needed. " + concreteNames
 }
 
 func contentText(raw json.RawMessage, attachments *[]Attachment) (string, error) {

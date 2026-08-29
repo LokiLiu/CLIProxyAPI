@@ -94,6 +94,9 @@ func TestBuildAnthropicInvocationPreservesToolBlocks(t *testing.T) {
 	if len(invocation.Tools.Specs) != 1 || invocation.Tools.Specs[0].SDKName != "read_file" {
 		t.Fatalf("unexpected tools: %#v", invocation.Tools)
 	}
+	if !strings.Contains(invocation.SystemPrompt, "never call wrappers") || !strings.Contains(invocation.SystemPrompt, "full_turn") {
+		t.Fatalf("system prompt lost external-tool protocol guidance: %s", invocation.SystemPrompt)
+	}
 	if !strings.Contains(invocation.Prompt, `"type": "tool_result"`) || !strings.Contains(invocation.Prompt, `"tool_use_id": "toolu_old"`) {
 		t.Fatalf("prompt lost Anthropic tool history: %s", invocation.Prompt)
 	}

@@ -173,7 +173,7 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 
 func isWrappedToolName(name string) bool {
 	switch canonicalWrappedToolName(name) {
-	case "mcpopenaitools", "tool", "tooluse", "toolcall", "toolcalls", "functioncall":
+	case "mcpopenaitools", "tool", "tooluse", "toolcall", "toolcalls", "functioncall", "fullturn":
 		return true
 	default:
 		return false
@@ -188,7 +188,7 @@ func canonicalWrappedToolName(name string) string {
 		}
 	}
 	value := canonical.String()
-	for _, wrapper := range []string{"toolcalls", "toolcall", "tooluse", "functioncall", "tool"} {
+	for _, wrapper := range []string{"toolcalls", "toolcall", "tooluse", "functioncall", "fullturn", "tool"} {
 		if value == wrapper {
 			return wrapper
 		}
