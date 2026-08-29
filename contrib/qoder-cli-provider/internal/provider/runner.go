@@ -114,7 +114,9 @@ func Run(ctx context.Context, account Account, invocation Invocation, onText Tex
 		return Result{}, fmt.Errorf("send qodercli request: %w", err)
 	}
 
-	result, runErr := consumeEvents(ctx, events, readErrors, callback.Calls, invocation, onText)
+	result, runErr := consumeEvents(ctx, events, readErrors, callback.Calls, invocation, onText, func(event qoderEvent) error {
+		return allowGenericToolControlRequest(encoder, event)
+	})
 	_ = stdin.Close()
 	if runErr != nil || len(result.ToolCalls) > 0 {
 		_ = killProcessTree(cmd)
@@ -336,7 +338,7 @@ func waitForInitialize(ctx context.Context, events <-chan qoderEvent, readErrors
 	}
 }
 
-func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-chan error, toolCalls <-chan ToolCall, invocation Invocation, onText TextHandler) (Result, error) {
+func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-chan error, toolCalls <-chan ToolCall, invocation Invocation, onText TextHandler, respondControl func(qoderEvent) error) (Result, error) {
 	result := Result{Model: invocation.Model, FinishReason: "stop"}
 	streamed := false
 	idle := time.NewTimer(qoderStreamIdleTimeout)
@@ -367,6 +369,15 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 				// the upstream harness into a normal tool call; never authorize Qoder
 				// to execute the tool itself.
 				call, keep, callErr := event.externalToolCall(invocation.Tools)
+				if isWrappedToolName(event.Request.ToolName) && (callErr != nil || !keep) {
+					if respondControl == nil {
+						return Result{}, fmt.Errorf("qodercli requested generic external tool %q without a control responder", event.Request.ToolName)
+					}
+					if err := respondControl(event); err != nil {
+						return Result{}, fmt.Errorf("allow qodercli generic external tool %q: %w", event.Request.ToolName, err)
+					}
+					continue
+				}
 				if callErr != nil {
 					return Result{}, callErr
 				}
@@ -441,6 +452,38 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 			}
 		}
 	}
+}
+
+func allowGenericToolControlRequest(encoder *json.Encoder, event qoderEvent) error {
+	requestID := strings.TrimSpace(event.RequestID)
+	if requestID == "" {
+		requestID = strings.TrimSpace(event.Request.RequestID)
+	}
+	if requestID == "" {
+		return fmt.Errorf("control request id is required")
+	}
+	input := event.Request.Input
+	if len(input) == 0 || string(input) == "null" {
+		input = event.Request.Arguments
+	}
+	if len(input) == 0 || string(input) == "null" {
+		input = json.RawMessage(`{}`)
+	}
+	response := map[string]any{
+		"behavior":     "allow",
+		"updatedInput": input,
+	}
+	if toolUseID := strings.TrimSpace(event.Request.ToolUseID); toolUseID != "" {
+		response["toolUseID"] = toolUseID
+	}
+	return encoder.Encode(map[string]any{
+		"type": "control_response",
+		"response": map[string]any{
+			"subtype":    "success",
+			"request_id": requestID,
+			"response":   response,
+		},
+	})
 }
 
 func resetTimer(timer *time.Timer, duration time.Duration) {
