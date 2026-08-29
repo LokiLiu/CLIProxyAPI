@@ -341,6 +341,7 @@ func waitForInitialize(ctx context.Context, events <-chan qoderEvent, readErrors
 func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-chan error, toolCalls <-chan ToolCall, invocation Invocation, onText TextHandler, respondControl func(qoderEvent) error) (Result, error) {
 	result := Result{Model: invocation.Model, FinishReason: "stop"}
 	streamed := false
+	awaitingGenericToolCallback := false
 	idle := time.NewTimer(qoderStreamIdleTimeout)
 	defer idle.Stop()
 	for {
@@ -354,11 +355,21 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 			result.FinishReason = "tool_calls"
 			return finalizeUsage(result, invocation), nil
 		case err := <-readErrors:
+			if call, ok := pendingToolCall(toolCalls); ok {
+				result.ToolCalls = []ToolCall{call}
+				result.FinishReason = "tool_calls"
+				return finalizeUsage(result, invocation), nil
+			}
 			if errors.Is(err, io.EOF) && (result.Text != "" || len(result.ToolCalls) > 0) {
 				return finalizeUsage(result, invocation), nil
 			}
 			return Result{}, err
 		case event, ok := <-events:
+			if call, found := pendingToolCall(toolCalls); found {
+				result.ToolCalls = []ToolCall{call}
+				result.FinishReason = "tool_calls"
+				return finalizeUsage(result, invocation), nil
+			}
 			if !ok {
 				return Result{}, io.ErrUnexpectedEOF
 			}
@@ -376,6 +387,7 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 					if err := respondControl(event); err != nil {
 						return Result{}, fmt.Errorf("allow qodercli generic external tool %q: %w", event.Request.ToolName, err)
 					}
+					awaitingGenericToolCallback = true
 					continue
 				}
 				if callErr != nil {
@@ -445,12 +457,29 @@ func consumeEvents(ctx context.Context, events <-chan qoderEvent, readErrors <-c
 				if event.Usage.InputTokens+event.Usage.OutputTokens > 0 {
 					result.Usage = usageFromQoder(event.Usage)
 				}
+				if call, ok := pendingToolCall(toolCalls); ok {
+					result.ToolCalls = []ToolCall{call}
+					result.FinishReason = "tool_calls"
+					return finalizeUsage(result, invocation), nil
+				}
+				if awaitingGenericToolCallback && strings.TrimSpace(result.Text) == "" {
+					continue
+				}
 				if invocation.Tools.Required {
 					return Result{}, fmt.Errorf("qoder did not return the required external tool call")
 				}
 				return finalizeUsage(result, invocation), nil
 			}
 		}
+	}
+}
+
+func pendingToolCall(toolCalls <-chan ToolCall) (ToolCall, bool) {
+	select {
+	case call, ok := <-toolCalls:
+		return call, ok
+	default:
+		return ToolCall{}, false
 	}
 }
 

@@ -66,7 +66,7 @@ func TestConsumeEventsForwardsPermissionRequestAsCallerTool(t *testing.T) {
 }
 
 func TestConsumeEventsAllowsGenericPermissionAndWaitsForBridgeCallback(t *testing.T) {
-	events := make(chan qoderEvent, 1)
+	events := make(chan qoderEvent, 2)
 	toolCalls := make(chan ToolCall, 1)
 	event := qoderEvent{Type: "control_request", RequestID: "permission-1"}
 	event.Request.Subtype = "can_use_tool"
@@ -88,6 +88,7 @@ func TestConsumeEventsAllowsGenericPermissionAndWaitsForBridgeCallback(t *testin
 		if got.RequestID != "permission-1" {
 			t.Fatalf("unexpected control request: %#v", got)
 		}
+		events <- qoderEvent{Type: "result", Subtype: "success"}
 		toolCalls <- ToolCall{ID: "call-1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo ok"}`)}
 		return nil
 	})
@@ -96,6 +97,31 @@ func TestConsumeEventsAllowsGenericPermissionAndWaitsForBridgeCallback(t *testin
 	}
 	if !responded || result.FinishReason != "tool_calls" || len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "bash" {
 		t.Fatalf("responded=%v result=%#v", responded, result)
+	}
+}
+
+func TestConsumeEventsDoesNotReturnEmptyResultWhileGenericCallbackIsPending(t *testing.T) {
+	events := make(chan qoderEvent, 2)
+	errs := make(chan error, 1)
+	event := qoderEvent{Type: "control_request", RequestID: "permission-1"}
+	event.Request.Subtype = "can_use_tool"
+	event.Request.ToolName = "mcp__openai_tools"
+	event.Request.Input = json.RawMessage(`{}`)
+	events <- event
+
+	_, err := consumeEvents(context.Background(), events, errs, make(chan ToolCall), Invocation{
+		Tools: ToolPlan{
+			Specs:       []ToolSpec{{Name: "bash", SDKName: "bash"}},
+			NameBySDK:   map[string]string{"bash": "bash"},
+			PassThrough: true,
+		},
+	}, nil, func(qoderEvent) error {
+		events <- qoderEvent{Type: "result", Subtype: "success"}
+		errs <- io.EOF
+		return nil
+	})
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("consumeEvents() error = %v, want EOF instead of empty success", err)
 	}
 }
 
