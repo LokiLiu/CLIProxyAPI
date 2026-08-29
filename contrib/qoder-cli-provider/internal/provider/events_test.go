@@ -57,7 +57,7 @@ func TestNormalizeToolCallInfersConcreteToolFromGenericWrapper(t *testing.T) {
 	}
 	for _, wrapper := range []string{
 		"mcp__openai_tools", "MCP-OpenAI-Tools",
-		"tool_use", "ToolUse", "tool-use",
+		"Tool", "tool_use", "ToolUse", "tool-use",
 		"tool_call", "ToolCalls", "functionCall",
 		"OpenAI::tool_call", "OpenAI/tool-calls",
 		"MCP::OpenAI::tool_call", "Qoder.tool_use", "Anthropic function_call",
@@ -74,6 +74,40 @@ func TestNormalizeToolCallInfersConcreteToolFromGenericWrapper(t *testing.T) {
 				t.Fatalf("unexpected call: %#v", call)
 			}
 		})
+	}
+}
+
+func TestNormalizeToolCallInfersDeclaredToolWithoutKnownWrapperName(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{
+			{Name: "bash", SDKName: "bash", Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}}, "required": []any{"command"},
+			}},
+			{Name: "job_output", SDKName: "job_output", Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []any{"job_id"},
+			}},
+		},
+		NameBySDK:   map[string]string{"bash": "bash", "job_output": "job_output"},
+		PassThrough: true,
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{
+		Type: "tool_use", Name: "UnseenAlias", Input: json.RawMessage(`{"command":"echo ok"}`),
+	}, plan)
+	if err != nil || !keep || call.Name != "bash" {
+		t.Fatalf("call=%#v keep=%v err=%v", call, keep, err)
+	}
+}
+
+func TestNormalizeToolCallDoesNotInferSelectedToolFromInvalidEmptyMarker(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{{Name: "bash", SDKName: "bash", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}}, "required": []any{"command"},
+		}}},
+		NameBySDK: map[string]string{"bash": "bash"}, Selected: "bash", SelectedSDK: "bash", PassThrough: true,
+	}
+	_, keep, err := normalizeToolCall(qoderBlock{Type: "tool_use", Name: "Tool", Input: json.RawMessage(`{}`)}, plan)
+	if err != nil || keep {
+		t.Fatalf("keep=%v err=%v", keep, err)
 	}
 }
 

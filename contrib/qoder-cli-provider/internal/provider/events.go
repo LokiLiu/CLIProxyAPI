@@ -135,12 +135,17 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 				break
 			}
 		}
+		if _, _, known := resolveDeclaredToolName(name, plan); !known {
+			name = ""
+		}
 		if name == "" {
 			name = inferWrappedToolName(input, plan)
 		}
 		if name == "" {
 			return ToolCall{}, false, nil
 		}
+	} else if !declared {
+		name = inferWrappedToolName(input, plan)
 	}
 	name, original, known := resolveDeclaredToolName(unprefixToolName(name), plan)
 	if !known {
@@ -168,7 +173,7 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 
 func isWrappedToolName(name string) bool {
 	switch canonicalWrappedToolName(name) {
-	case "mcpopenaitools", "tooluse", "toolcall", "toolcalls", "functioncall":
+	case "mcpopenaitools", "tool", "tooluse", "toolcall", "toolcalls", "functioncall":
 		return true
 	default:
 		return false
@@ -183,7 +188,7 @@ func canonicalWrappedToolName(name string) string {
 		}
 	}
 	value := canonical.String()
-	for _, wrapper := range []string{"toolcalls", "toolcall", "tooluse", "functioncall"} {
+	for _, wrapper := range []string{"toolcalls", "toolcall", "tooluse", "functioncall", "tool"} {
 		if value == wrapper {
 			return wrapper
 		}
@@ -210,7 +215,15 @@ func isWrappedToolNamespace(name string) bool {
 // or an ambiguous payload into an arbitrary caller tool.
 func inferWrappedToolName(input map[string]any, plan ToolPlan) string {
 	if plan.SelectedSDK != "" {
-		return plan.SelectedSDK
+		schema := schemaForTool(plan, plan.SelectedSDK)
+		normalized := normalizeArguments(cloneArguments(input), schema)
+		if validateArguments(normalized, schema, "arguments") == nil {
+			properties, _ := schema["properties"].(map[string]any)
+			if len(properties) == 0 || argumentPropertyMatchScore(normalized, schema) > 0 {
+				return plan.SelectedSDK
+			}
+		}
+		return ""
 	}
 	type candidate struct {
 		name  string
