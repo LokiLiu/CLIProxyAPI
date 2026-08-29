@@ -118,7 +118,7 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 	}
 
 	name := unprefixToolName(rawName)
-	_, declared := plan.NameBySDK[name]
+	_, _, declared := resolveDeclaredToolName(name, plan)
 	if !declared && isWrappedToolName(rawName) {
 		name = firstArgumentString(input, "tool_name", "toolName", "tool", "name")
 		if nested, ok := input["function"].(map[string]any); ok {
@@ -142,8 +142,7 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 			return ToolCall{}, false, nil
 		}
 	}
-	name = unprefixToolName(name)
-	original, known := plan.NameBySDK[name]
+	name, original, known := resolveDeclaredToolName(unprefixToolName(name), plan)
 	if !known {
 		return ToolCall{}, false, fmt.Errorf("qoder returned unknown external tool %q", rawName)
 	}
@@ -295,6 +294,65 @@ func unprefixToolName(name string) string {
 		name = strings.TrimPrefix(name, prefix)
 	}
 	return name
+}
+
+func resolveDeclaredToolName(name string, plan ToolPlan) (string, string, bool) {
+	if original, ok := plan.NameBySDK[name]; ok {
+		return name, original, true
+	}
+
+	candidate := name
+	if stripped, ok := stripToolDecorator(name); ok {
+		candidate = stripped
+	}
+	wanted := canonicalToolIdentifier(candidate)
+	if wanted == "" {
+		return "", "", false
+	}
+	matchedSDK := ""
+	matchedOriginal := ""
+	for sdkName, original := range plan.NameBySDK {
+		if canonicalToolIdentifier(sdkName) != wanted {
+			continue
+		}
+		if matchedSDK != "" {
+			return "", "", false
+		}
+		matchedSDK = sdkName
+		matchedOriginal = original
+	}
+	if matchedSDK == "" {
+		return "", "", false
+	}
+	return matchedSDK, matchedOriginal, true
+}
+
+func stripToolDecorator(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	lower := strings.ToLower(name)
+	for _, prefix := range []string{
+		"external_tool", "external-tool", "external::tool", "external.tool", "external/tool", "external tool",
+		"externaltool", "function", "tool",
+	} {
+		if !strings.HasPrefix(lower, prefix) || len(name) == len(prefix) {
+			continue
+		}
+		remainder := name[len(prefix):]
+		if first := remainder[0]; first == '_' || first == '-' || first == ':' || first == '.' || first == '/' || first == ' ' {
+			return strings.TrimLeft(remainder, "_-:./ "), true
+		}
+	}
+	return name, false
+}
+
+func canonicalToolIdentifier(name string) string {
+	var canonical strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			canonical.WriteRune(r)
+		}
+	}
+	return canonical.String()
 }
 
 func decodeArguments(raw json.RawMessage) map[string]any {

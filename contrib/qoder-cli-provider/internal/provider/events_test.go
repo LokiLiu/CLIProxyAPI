@@ -92,6 +92,57 @@ func TestNormalizeToolCallPreservesDeclaredToolNamedLikeWrapper(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolCallResolvesDecoratedDeclaredToolName(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{{Name: "bash", SDKName: "bash", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}},
+		}}},
+		NameBySDK:   map[string]string{"bash": "bash"},
+		PassThrough: true,
+	}
+	for _, name := range []string{"Tool__Bash", "tool::bash", "FUNCTION/bash", "external-tool.bash"} {
+		t.Run(name, func(t *testing.T) {
+			call, keep, err := normalizeToolCall(qoderBlock{
+				Type: "tool_use", Name: name, Input: json.RawMessage(`{"command":"echo ok"}`),
+			}, plan)
+			if err != nil || !keep || call.Name != "bash" {
+				t.Fatalf("call=%#v keep=%v err=%v", call, keep, err)
+			}
+		})
+	}
+}
+
+func TestNormalizeToolCallPreservesDeclaredDecoratedToolName(t *testing.T) {
+	plan := ToolPlan{
+		Specs:       []ToolSpec{{Name: "Tool__Bash", SDKName: "Tool__Bash"}},
+		NameBySDK:   map[string]string{"Tool__Bash": "Tool__Bash"},
+		PassThrough: true,
+	}
+	call, keep, err := normalizeToolCall(qoderBlock{Type: "tool_use", Name: "Tool__Bash", Input: json.RawMessage(`{}`)}, plan)
+	if err != nil || !keep || call.Name != "Tool__Bash" {
+		t.Fatalf("call=%#v keep=%v err=%v", call, keep, err)
+	}
+}
+
+func TestNormalizeToolCallDoesNotGuessAmbiguousCanonicalToolName(t *testing.T) {
+	plan := ToolPlan{
+		NameBySDK:   map[string]string{"Bash": "upper", "bash": "lower"},
+		PassThrough: true,
+	}
+	_, _, err := normalizeToolCall(qoderBlock{Type: "tool_use", Name: "Tool__BASH", Input: json.RawMessage(`{}`)}, plan)
+	if err == nil || !strings.Contains(err.Error(), "unknown external tool") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestNormalizeToolCallRequiresSeparatorAfterDecorator(t *testing.T) {
+	plan := ToolPlan{NameBySDK: map[string]string{"box": "box"}, PassThrough: true}
+	_, _, err := normalizeToolCall(qoderBlock{Type: "tool_use", Name: "toolbox", Input: json.RawMessage(`{}`)}, plan)
+	if err == nil || !strings.Contains(err.Error(), "unknown external tool") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestNormalizeToolCallDoesNotGuessAmbiguousBareMCPServerName(t *testing.T) {
 	plan := ToolPlan{
 		Specs: []ToolSpec{
