@@ -230,6 +230,26 @@ func TestNormalizeToolCallUnwrapsFullTurnEnvelope(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolCallUnwrapsPluralFunctionCallsEnvelope(t *testing.T) {
+	plan := ToolPlan{
+		Specs: []ToolSpec{{Name: "bash", SDKName: "bash", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}}, "required": []any{"command"},
+		}}},
+		NameBySDK: map[string]string{"bash": "bash"},
+	}
+	for _, wrapper := range []string{"function_calls", "Function_calls", "FunctionCalls", "OpenAI::function_calls"} {
+		t.Run(wrapper, func(t *testing.T) {
+			call, keep, err := normalizeToolCall(qoderBlock{
+				Type: "tool_use", Name: wrapper,
+				Input: json.RawMessage(`{"function":{"name":"bash","arguments":{"command":"echo ok"}}}`),
+			}, plan)
+			if err != nil || !keep || call.Name != "bash" || string(call.Arguments) != `{"command":"echo ok"}` {
+				t.Fatalf("call=%#v keep=%v err=%v", call, keep, err)
+			}
+		})
+	}
+}
+
 func TestNormalizeToolCallIgnoresEmptyToolCallsMarker(t *testing.T) {
 	_, keep, err := normalizeToolCall(qoderBlock{Type: "tool_use", Name: "tool_calls", Input: json.RawMessage(`{}`)}, ToolPlan{})
 	if err != nil || keep {
