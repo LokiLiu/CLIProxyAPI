@@ -172,6 +172,13 @@ func normalizeToolCall(block qoderBlock, plan ToolPlan) (ToolCall, bool, error) 
 }
 
 func isWrappedToolName(name string) bool {
+	// Qoder sometimes serializes an anonymous function-call array into the
+	// tool-name slot (for example "[]"). A non-empty name with no identifier
+	// characters cannot be a declared SDK function, so treat it as an envelope
+	// and wait for the authenticated MCP callback to supply the exact call.
+	if strings.TrimSpace(name) != "" && canonicalToolIdentifier(name) == "" {
+		return true
+	}
 	switch canonicalWrappedToolName(name) {
 	case "mcpopenaitools", "tool", "tooluse", "toolcall", "toolcalls", "functioncall", "functioncalls", "fullturn":
 		return true

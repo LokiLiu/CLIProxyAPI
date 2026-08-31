@@ -189,7 +189,7 @@ func toolInstruction(plan ToolPlan) string {
 	if len(plan.Specs) == 0 {
 		return "Do not call any tools."
 	}
-	const concreteNames = "Call concrete function names directly; never call wrappers named tool_calls, tool_call, function_calls, function_call, mcp__openai_tools, or full_turn. The upstream harness executes the functions."
+	const concreteNames = "Call concrete function names directly; never call wrappers named tool_calls, tool_call, function_calls, function_call, mcp__openai_tools, full_turn, or punctuation-only names such as []. The upstream harness executes the functions."
 	if plan.Selected != "" {
 		return fmt.Sprintf("Call the external function %s. %s", plan.Selected, concreteNames)
 	}

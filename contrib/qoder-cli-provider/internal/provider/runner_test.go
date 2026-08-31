@@ -66,37 +66,41 @@ func TestConsumeEventsForwardsPermissionRequestAsCallerTool(t *testing.T) {
 }
 
 func TestConsumeEventsAllowsGenericPermissionAndWaitsForBridgeCallback(t *testing.T) {
-	events := make(chan qoderEvent, 2)
-	toolCalls := make(chan ToolCall, 1)
-	event := qoderEvent{Type: "control_request", RequestID: "permission-1"}
-	event.Request.Subtype = "can_use_tool"
-	event.Request.ToolName = "mcp__openai_tools"
-	event.Request.ToolUseID = "wrapper-1"
-	event.Request.Input = json.RawMessage(`{}`)
-	events <- event
+	for _, wrapper := range []string{"mcp__openai_tools", "[]"} {
+		t.Run(wrapper, func(t *testing.T) {
+			events := make(chan qoderEvent, 2)
+			toolCalls := make(chan ToolCall, 1)
+			event := qoderEvent{Type: "control_request", RequestID: "permission-1"}
+			event.Request.Subtype = "can_use_tool"
+			event.Request.ToolName = wrapper
+			event.Request.ToolUseID = "wrapper-1"
+			event.Request.Input = json.RawMessage(`{}`)
+			events <- event
 
-	responded := false
-	result, err := consumeEvents(context.Background(), events, nil, toolCalls, Invocation{
-		Model: "Aria",
-		Tools: ToolPlan{
-			Specs:       []ToolSpec{{Name: "bash", SDKName: "bash"}},
-			NameBySDK:   map[string]string{"bash": "bash"},
-			PassThrough: true,
-		},
-	}, nil, func(got qoderEvent) error {
-		responded = true
-		if got.RequestID != "permission-1" {
-			t.Fatalf("unexpected control request: %#v", got)
-		}
-		events <- qoderEvent{Type: "result", Subtype: "success"}
-		toolCalls <- ToolCall{ID: "call-1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo ok"}`)}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !responded || result.FinishReason != "tool_calls" || len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "bash" {
-		t.Fatalf("responded=%v result=%#v", responded, result)
+			responded := false
+			result, err := consumeEvents(context.Background(), events, nil, toolCalls, Invocation{
+				Model: "Aria",
+				Tools: ToolPlan{
+					Specs:       []ToolSpec{{Name: "bash", SDKName: "bash"}},
+					NameBySDK:   map[string]string{"bash": "bash"},
+					PassThrough: true,
+				},
+			}, nil, func(got qoderEvent) error {
+				responded = true
+				if got.RequestID != "permission-1" {
+					t.Fatalf("unexpected control request: %#v", got)
+				}
+				events <- qoderEvent{Type: "result", Subtype: "success"}
+				toolCalls <- ToolCall{ID: "call-1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo ok"}`)}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !responded || result.FinishReason != "tool_calls" || len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "bash" {
+				t.Fatalf("responded=%v result=%#v", responded, result)
+			}
+		})
 	}
 }
 
