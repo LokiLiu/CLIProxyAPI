@@ -249,7 +249,7 @@ func TestCommandArgsWritesAndCleansImageAttachments(t *testing.T) {
 
 func TestParseDiscoveredModelsAddsCompatibilityModels(t *testing.T) {
 	got := parseDiscoveredModels("MODEL\nAuto\nPerformance\n")
-	want := []string{"Auto", "Performance", "Aria", "Cantus"}
+	want := []string{"Auto", "Performance", "Aria", "Cantus", "Ultimate"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseDiscoveredModels() = %#v, want %#v", got, want)
 	}
@@ -257,7 +257,7 @@ func TestParseDiscoveredModelsAddsCompatibilityModels(t *testing.T) {
 
 func TestParseDiscoveredModelsDoesNotDuplicateCompatibilityModels(t *testing.T) {
 	got := parseDiscoveredModels("Available models:\n- Auto\n- Aria\n- Cantus\n")
-	want := []string{"Auto", "Aria", "Cantus"}
+	want := []string{"Auto", "Aria", "Cantus", "Ultimate"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseDiscoveredModels() = %#v, want %#v", got, want)
 	}

@@ -572,7 +572,7 @@ func DiscoverModels(ctx context.Context, account Account) ([]string, error) {
 	}
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
-		// Model discovery is advisory. Aria and Cantus are service-side
+		// Model discovery is advisory. Compatibility model names are service-side
 		// compatibility names and must remain routable even when --list-models
 		// is stale, rate-limited, or unavailable for one account.
 		return append([]string(nil), qoderCompatibilityModels...), nil
@@ -580,11 +580,11 @@ func DiscoverModels(ctx context.Context, account Account) ([]string, error) {
 	return parseDiscoveredModels(string(raw)), nil
 }
 
-// Aria and Cantus are compatibility model names controlled by the Qoder
-// service. Recent CLI releases may omit them from --list-models even when an
-// account can still use them, so the gateway must not reject either name
+// These compatibility model names are controlled by the Qoder service. Recent
+// CLI releases may omit them from --list-models even when an account can still
+// use them, so the gateway must not reject any of these names
 // before qodercli has a chance to handle the request.
-var qoderCompatibilityModels = []string{"Aria", "Cantus"}
+var qoderCompatibilityModels = []string{"Aria", "Cantus", "Ultimate"}
 
 func parseDiscoveredModels(raw string) []string {
 	models := make([]string, 0)
