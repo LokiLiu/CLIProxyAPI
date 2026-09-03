@@ -52,8 +52,17 @@ func EncodeAnthropicResponse(result Result) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"id": completionID("msg"), "type": "message", "role": "assistant", "model": result.Model,
 		"content": content, "stop_reason": stopReason, "stop_sequence": nil,
-		"usage": map[string]any{"input_tokens": result.Usage.PromptTokens, "output_tokens": result.Usage.CompletionTokens},
+		"usage": AnthropicUsage(result.Usage),
 	})
+}
+
+func AnthropicUsage(usage Usage) map[string]any {
+	return map[string]any{
+		"input_tokens":                usage.PromptTokens,
+		"output_tokens":               usage.CompletionTokens,
+		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+		"cache_read_input_tokens":     usage.CacheReadInputTokens,
+	}
 }
 
 func EncodeStreamRole(id, model string) []byte {

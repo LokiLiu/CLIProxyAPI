@@ -7,12 +7,23 @@ import (
 )
 
 type anthropicRequest struct {
-	Model      string              `json:"model"`
-	System     json.RawMessage     `json:"system"`
-	Messages   []anthropicMessage  `json:"messages"`
-	Tools      []anthropicTool     `json:"tools"`
-	ToolChoice anthropicToolChoice `json:"tool_choice"`
-	MaxTokens  int                 `json:"max_tokens"`
+	Model        string                `json:"model"`
+	System       json.RawMessage       `json:"system"`
+	Messages     []anthropicMessage    `json:"messages"`
+	Tools        []anthropicTool       `json:"tools"`
+	ToolChoice   anthropicToolChoice   `json:"tool_choice"`
+	MaxTokens    int                   `json:"max_tokens"`
+	Thinking     anthropicThinking     `json:"thinking"`
+	OutputConfig anthropicOutputConfig `json:"output_config"`
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+type anthropicOutputConfig struct {
+	Effort string `json:"effort"`
 }
 
 type anthropicMessage struct {
@@ -81,12 +92,15 @@ func BuildAnthropicInvocation(raw []byte, routedModel string) (Invocation, error
 		return Invocation{}, fmt.Errorf("encode Messages conversation: %w", errMarshal)
 	}
 	return Invocation{
-		Model:        model,
-		SystemPrompt: systemPrompt,
-		Prompt:       "Return only the next assistant message for this Anthropic Messages conversation.\n\n" + string(conversationJSON),
-		MaxTokens:    request.MaxTokens,
-		Tools:        plan,
-		Attachments:  attachments,
+		Model:           model,
+		SystemPrompt:    systemPrompt,
+		Prompt:          "Return only the next assistant message for this Anthropic Messages conversation.\n\n" + string(conversationJSON),
+		MaxTokens:       request.MaxTokens,
+		ThinkingMode:    strings.ToLower(strings.TrimSpace(request.Thinking.Type)),
+		ThinkingBudget:  request.Thinking.BudgetTokens,
+		ReasoningEffort: strings.ToLower(strings.TrimSpace(request.OutputConfig.Effort)),
+		Tools:           plan,
+		Attachments:     attachments,
 	}, nil
 }
 

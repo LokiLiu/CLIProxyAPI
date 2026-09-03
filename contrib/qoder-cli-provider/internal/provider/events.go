@@ -67,8 +67,10 @@ type qoderBlock struct {
 }
 
 type qoderUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 }
 
 func textDelta(event qoderEvent) string {
@@ -638,7 +640,13 @@ func stringSlice(value any) []string {
 }
 
 func usageFromQoder(value qoderUsage) Usage {
-	return Usage{PromptTokens: value.InputTokens, CompletionTokens: value.OutputTokens, TotalTokens: value.InputTokens + value.OutputTokens}
+	return Usage{
+		PromptTokens:             value.InputTokens,
+		CompletionTokens:         value.OutputTokens,
+		TotalTokens:              value.InputTokens + value.OutputTokens,
+		CacheCreationInputTokens: value.CacheCreationInputTokens,
+		CacheReadInputTokens:     value.CacheReadInputTokens,
+	}
 }
 
 func resultError(event qoderEvent) string {

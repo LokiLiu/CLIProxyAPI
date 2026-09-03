@@ -177,6 +177,15 @@ func commandArgs(account Account, invocation Invocation, callback *toolCallbackS
 	if invocation.MaxTokens > 0 {
 		args = append(args, "--max-output-tokens", fmt.Sprint(invocation.MaxTokens))
 	}
+	if invocation.ThinkingMode != "" {
+		args = append(args, "--thinking", invocation.ThinkingMode)
+	}
+	if invocation.ThinkingBudget > 0 {
+		args = append(args, "--thinking-budget", fmt.Sprint(invocation.ThinkingBudget))
+	}
+	if invocation.ReasoningEffort != "" {
+		args = append(args, "--reasoning-effort", invocation.ReasoningEffort)
+	}
 	if account.ConfigDir != "" {
 		args = append(args, "--config-dir", account.ConfigDir)
 	}

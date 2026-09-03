@@ -218,6 +218,24 @@ func TestCommandArgsBypassPermissionsOnlyForCallerTools(t *testing.T) {
 	}
 }
 
+func TestCommandArgsPassesThinkingControls(t *testing.T) {
+	args, cleanup, err := commandArgs(Account{}, Invocation{
+		ThinkingMode:    "adaptive",
+		ThinkingBudget:  8192,
+		ReasoningEffort: "high",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	joined := strings.Join(args, " ")
+	for _, expected := range []string{"--thinking adaptive", "--thinking-budget 8192", "--reasoning-effort high"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("command args %q missing %q", joined, expected)
+		}
+	}
+}
+
 func TestCommandArgsWritesAndCleansImageAttachments(t *testing.T) {
 	args, cleanup, err := commandArgs(Account{}, Invocation{Attachments: []Attachment{{
 		FileName: "image-001.png", MediaType: "image/png", Data: []byte("png-data"),

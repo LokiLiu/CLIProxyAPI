@@ -278,7 +278,7 @@ func modelsForAuth(raw []byte) ([]byte, error) {
 		infos = append(infos, pluginapi.ModelInfo{
 			ID: model, Name: model, Object: "model", OwnedBy: account.Prefix,
 			DisplayName: model, SupportedGenerationMethods: []string{"chat"},
-			SupportedParameters:      []string{"max_tokens", "stream", "system", "tools", "tool_choice"},
+			SupportedParameters:      []string{"max_tokens", "stream", "system", "tools", "tool_choice", "thinking", "output_config", "reasoning_effort"},
 			SupportedInputModalities: []string{"text"}, SupportedOutputModalities: []string{"text"},
 			UserDefined: true,
 		})
@@ -447,7 +447,7 @@ func runAnthropicStream(ctx context.Context, streamID string, invocation provide
 		"message": map[string]any{
 			"id": messageID, "type": "message", "role": "assistant", "model": invocation.Model,
 			"content": []any{}, "stop_reason": nil, "stop_sequence": nil,
-			"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
+			"usage": provider.AnthropicUsage(provider.Usage{}),
 		},
 	})); err != nil {
 		closeStream(streamID, err)
@@ -517,7 +517,7 @@ func runAnthropicStream(ctx context.Context, streamID string, invocation provide
 	}
 	if err = emitStream(streamID, provider.EncodeAnthropicStreamEvent("message_delta", map[string]any{
 		"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
-		"usage": map[string]any{"input_tokens": result.Usage.PromptTokens, "output_tokens": result.Usage.CompletionTokens},
+		"usage": provider.AnthropicUsage(result.Usage),
 	})); err == nil {
 		err = emitStream(streamID, provider.EncodeAnthropicStreamEvent("message_stop", map[string]any{"type": "message_stop"}))
 	}

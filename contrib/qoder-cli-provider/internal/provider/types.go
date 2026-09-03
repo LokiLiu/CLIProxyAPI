@@ -38,12 +38,15 @@ type ToolPlan struct {
 }
 
 type Invocation struct {
-	Model        string
-	SystemPrompt string
-	Prompt       string
-	MaxTokens    int
-	Tools        ToolPlan
-	Attachments  []Attachment
+	Model           string
+	SystemPrompt    string
+	Prompt          string
+	MaxTokens       int
+	ThinkingMode    string
+	ThinkingBudget  int
+	ReasoningEffort string
+	Tools           ToolPlan
+	Attachments     []Attachment
 }
 
 type ToolCall struct {
@@ -53,9 +56,11 @@ type ToolCall struct {
 }
 
 type Usage struct {
-	PromptTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
+	PromptTokens             int64
+	CompletionTokens         int64
+	TotalTokens              int64
+	CacheCreationInputTokens int64
+	CacheReadInputTokens     int64
 }
 
 type Result struct {

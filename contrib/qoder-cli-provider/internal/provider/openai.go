@@ -12,11 +12,12 @@ const baseSystemPrompt = "You are a model backend for an upstream agent harness.
 var invalidToolName = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
 type chatRequest struct {
-	Model      string          `json:"model"`
-	Messages   []chatMessage   `json:"messages"`
-	Tools      []chatTool      `json:"tools"`
-	ToolChoice json.RawMessage `json:"tool_choice"`
-	MaxTokens  int             `json:"max_tokens"`
+	Model           string          `json:"model"`
+	Messages        []chatMessage   `json:"messages"`
+	Tools           []chatTool      `json:"tools"`
+	ToolChoice      json.RawMessage `json:"tool_choice"`
+	MaxTokens       int             `json:"max_tokens"`
+	ReasoningEffort string          `json:"reasoning_effort"`
 }
 
 type chatMessage struct {
@@ -109,12 +110,13 @@ func BuildInvocation(raw []byte, routedModel string) (Invocation, error) {
 	}
 	prompt := "Complete the conversation below and return only the next assistant message.\n\n" + string(conversationJSON)
 	return Invocation{
-		Model:        model,
-		SystemPrompt: systemPrompt,
-		Prompt:       prompt,
-		MaxTokens:    request.MaxTokens,
-		Tools:        plan,
-		Attachments:  attachments,
+		Model:           model,
+		SystemPrompt:    systemPrompt,
+		Prompt:          prompt,
+		MaxTokens:       request.MaxTokens,
+		ReasoningEffort: strings.ToLower(strings.TrimSpace(request.ReasoningEffort)),
+		Tools:           plan,
+		Attachments:     attachments,
 	}, nil
 }
 

@@ -102,6 +102,21 @@ func TestBuildAnthropicInvocationPreservesToolBlocks(t *testing.T) {
 	}
 }
 
+func TestBuildAnthropicInvocationPreservesThinkingControls(t *testing.T) {
+	invocation, err := BuildAnthropicInvocation([]byte(`{
+  "model":"Aria",
+  "messages":[{"role":"user","content":"Think carefully"}],
+  "thinking":{"type":"adaptive","budget_tokens":8192},
+  "output_config":{"effort":"high"}
+}`), "Aria")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invocation.ThinkingMode != "adaptive" || invocation.ThinkingBudget != 8192 || invocation.ReasoningEffort != "high" {
+		t.Fatalf("unexpected thinking controls: %#v", invocation)
+	}
+}
+
 func TestBuildAnthropicInvocationConvertsBase64ImageToAttachment(t *testing.T) {
 	invocation, err := BuildAnthropicInvocation([]byte(`{
   "model":"Aria",
